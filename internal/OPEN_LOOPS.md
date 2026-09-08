@@ -2,7 +2,7 @@
 
 This file is intentionally small and alive.
 
-- Define the exact v0.1 interaction loop.
+- ~~Define the exact v0.1 interaction loop.~~ Closed 2026-09-08: long poll -> allowlist -> claim update_id -> bounded turn (1 LLM call, 20-msg window) -> persist -> reply -> mark processed. See `docs/decisions/0003-v01-loop.md`.
 - Decide which state is always loaded versus tool-retrieved.
 - Define canonical schemas for memory, tasks, projects, open loops, messages, and assets.
 - Define write-trust rules: what the model may persist automatically versus what requires confirmation.
