@@ -9,14 +9,14 @@
 	let { data }: { data: PageData } = $props();
 	const m = $derived(data.metrics);
 	const tokens = $derived(m.daily.map((d) => ({ label: d.day.slice(5), value: d.total_tokens })));
-	const spend = $derived(m.daily.map((d) => ({ label: d.day.slice(5), value: d.cost_usd })));
+	const spend = $derived(m.daily.map((d) => ({ label: d.day.slice(5), value: d.cost_usd ?? 0 })));
 	const today = $derived(m.daily[m.daily.length - 1]);
-	const avgPerDay = $derived(m.daily.length ? m.totals.cost_usd / m.daily.length : 0);
+	const avgPerDay = $derived(m.daily.length ? (m.totals.cost_usd ?? 0) / m.daily.length : 0);
 	const inPct = $derived(
 		m.totals.total_tokens ? Math.round((m.totals.prompt_tokens / m.totals.total_tokens) * 100) : 0
 	);
 	const rate = $derived(
-		`$${m.pricing.price_in_per_m} in / $${m.pricing.price_out_per_m} out per 1M`
+		`$${m.pricing?.price_in_per_m ?? '?'} in / $${m.pricing?.price_out_per_m ?? '?'} out per 1M`
 	);
 </script>
 

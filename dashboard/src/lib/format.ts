@@ -6,8 +6,9 @@ export function compact(n: number): string {
 }
 
 // USD formatting for server-computed spend (cost_usd in the payload).
-export function usd(v: number): string {
-	if (v < 0.01) return '<$0.01';
+// Tolerates undefined (old bot binary without cost fields): shows <$0.01.
+export function usd(v: number | undefined): string {
+	if (v === undefined || v < 0.01) return '<$0.01';
 	if (v < 1000) return '$' + v.toFixed(2);
 	return '$' + v.toFixed(0);
 }
