@@ -46,6 +46,15 @@ func (b *Bot) Stop() {
 	b.api.StopReceivingUpdates()
 }
 
+// SendTyping shows the "typing..." indicator in a chat. Telegram expires
+// it after ~5 seconds, so callers must resend it during slow work.
+func (b *Bot) SendTyping(chatID int64) error {
+	action := tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping)
+	if _, err := b.api.Send(action); err != nil {
+		return fmt.Errorf("telegram typing: %w", err)
+	}
+	return nil
+}
 // SendReply sends text to a chat. Callers must pass validated, bounded
 // text; Telegram caps messages at 4096 characters.
 func (b *Bot) SendReply(chatID int64, text string) error {

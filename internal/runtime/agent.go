@@ -38,6 +38,15 @@ type Sender interface {
 	SendReply(chatID int64, text string) error
 }
 
+// Typer shows a typing indicator in a chat. The agent uses it only if
+// the Sender also implements it, so test fakes stay minimal.
+type Typer interface {
+	SendTyping(chatID int64) error
+}
+
+// typingInterval resends the indicator before Telegram's ~5s expiry.
+const typingInterval = 4 * time.Second
+
 // Agent executes one update turn.
 type Agent struct {
 	cfg *config.Config
@@ -105,7 +114,9 @@ func (a *Agent) HandleUpdate(ctx context.Context, updateID int64, fromUserID, ch
 		msgs = append(msgs, inference.Message{Role: m.Role, Text: m.Text})
 	}
 	start := time.Now()
+	stopTyping := startTyping(a.bot, chatID, log)
 	reply, err := a.llm.Generate(ctx, msgs)
+	stopTyping()
 	latencyMs := time.Since(start).Milliseconds()
 	if err != nil {
 		// Fail recoverably: the user message is already durable, so a
@@ -170,6 +181,37 @@ func budgetHistory(msgs []storage.Message, maxChars int) []storage.Message {
 		keep = 1
 	}
 	return msgs[len(msgs)-keep:]
+}
+
+// startTyping sends one typing indicator immediately and keeps resending
+// it until the returned stop func runs. Typing failures only log: the
+// indicator is cosmetic and must never fail a turn. Senders without Typer
+// (e.g. test fakes) are silently skipped.
+func startTyping(bot Sender, chatID int64, log *slog.Logger) (stop func()) {
+	typer, ok := bot.(Typer)
+	if !ok {
+		return func() {}
+	}
+	send := func() {
+		if err := typer.SendTyping(chatID); err != nil {
+			log.Warn("typing indicator failed", "err", err)
+		}
+	}
+	send()
+	ticker := time.NewTicker(typingInterval)
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				send()
+			case <-done:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+	return func() { close(done) }
 }
 
 func truncate(s string, max int) string {
