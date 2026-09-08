@@ -25,6 +25,9 @@ var migration001 string
 //go:embed migrations/002_turn_stats.sql
 var migration002 string
 
+//go:embed migrations/003_proactive.sql
+var migration003 string
+
 // Open opens the SQLite database at path, applies required PRAGMAs per
 // connection via the DSN, verifies connectivity, and runs migrations.
 func Open(path string) (*sql.DB, error) {
@@ -57,7 +60,7 @@ func Open(path string) (*sql.DB, error) {
 func migrate(ctx context.Context, db *sql.DB) error {
 	// Migrations are idempotent (IF NOT EXISTS), so applying in order is
 	// safe on every boot without a version-tracking table.
-	for i, m := range []string{migration001, migration002} {
+	for i, m := range []string{migration001, migration002, migration003} {
 		if _, err := db.ExecContext(ctx, m); err != nil {
 			return fmt.Errorf("apply migration %03d: %w", i+1, err)
 		}

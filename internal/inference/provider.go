@@ -108,9 +108,9 @@ func (p *OpenAICompatible) Generate(ctx context.Context, msgs []Message) (string
 		}
 	}
 
-	resp, err := p.client.Chat.Completions.New(ctx, params)
+	resp, err := p.complete(ctx, params)
 	if err != nil {
-		return "", fmt.Errorf("llm generate: %w", err)
+		return "", err
 	}
 	if len(resp.Choices) == 0 {
 		return "", fmt.Errorf("llm generate: no choices in response")
@@ -125,4 +125,41 @@ func (p *OpenAICompatible) Generate(ctx context.Context, msgs []Message) (string
 		return "", fmt.Errorf("llm generate: empty reply")
 	}
 	return text, nil
+}
+
+// GenerateStructured calls the model with a caller-supplied system prompt
+// and returns the raw reply text. It exists for machine-consumed outputs
+// (JSON extraction) where the chat persona prompt would pollute the
+// result. Callers validate the output; this method trusts nothing.
+func (p *OpenAICompatible) GenerateStructured(ctx context.Context, sysPrompt, userPrompt string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, p.timeout)
+	defer cancel()
+
+	params := openai.ChatCompletionNewParams{
+		Model: p.model,
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.SystemMessage(sysPrompt),
+			openai.UserMessage(userPrompt),
+		},
+	}
+	resp, err := p.complete(ctx, params)
+	if err != nil {
+		return "", err
+	}
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("llm structured: no choices in response")
+	}
+	text := strings.TrimSpace(resp.Choices[0].Message.Content)
+	if text == "" {
+		return "", fmt.Errorf("llm structured: empty reply")
+	}
+	return text, nil
+}
+
+func (p *OpenAICompatible) complete(ctx context.Context, params openai.ChatCompletionNewParams) (*openai.ChatCompletion, error) {
+	resp, err := p.client.Chat.Completions.New(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("llm generate: %w", err)
+	}
+	return resp, nil
 }

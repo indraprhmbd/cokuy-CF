@@ -163,6 +163,10 @@ func (a *Agent) HandleUpdate(ctx context.Context, updateID int64, fromUserID, ch
 		Model:            a.cfg.LLMModel,
 		LatencyMs:        latencyMs,
 	})
+	// Post-turn extraction: detects open loops and reminder requests for
+	// future nudges. Runs after reply+mark so it never delays the user;
+	// failures only log.
+	a.detectAndApply(ctx, chatID, text, reply, log)
 }
 
 // budgetHistory keeps the newest messages fitting within maxChars (rune
