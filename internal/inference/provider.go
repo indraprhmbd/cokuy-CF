@@ -1,0 +1,111 @@
+// Package inference is Cokuy's provider-agnostic LLM boundary.
+//
+// Design: a narrow Generate interface with a single OpenAI-compatible
+// implementation. Sumopod (https://ai.sumopod.com/v1), OpenRouter
+// (https://openrouter.ai/api/v1), Ollama, vLLM, and any other
+// OpenAI-compatible endpoint all speak POST /chat/completions with Bearer
+// auth, so switching providers is an env change, never a code change.
+//
+// Deliberately Chat Completions, not the Responses API: the latter is
+// OpenAI-only, while Chat Completions is the portable wire format.
+//
+// Model output is data, never trusted instructions: callers persist it as
+// reply text via validated storage writes only.
+package inference
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
+)
+
+// Message is one turn of conversation context for the model.
+type Message struct {
+	Role string // "system", "user", or "assistant"
+	Text string
+}
+
+// Provider generates reply text from conversation context.
+type Provider interface {
+	Generate(ctx context.Context, msgs []Message) (string, error)
+}
+
+// OpenAICompatible is any OpenAI-compatible chat-completions endpoint
+// (Sumopod, OpenRouter, Ollama, ...). ExtraHeaders carries optional
+// provider extras such as OpenRouter's HTTP-Referer / X-Title ranking
+// headers; it is empty for providers that need none.
+type OpenAICompatible struct {
+	client  openai.Client
+	model   string
+	timeout time.Duration
+}
+
+// NewOpenAICompatible builds a provider from explicit values (env-supplied
+// by the caller, typically from config).
+func NewOpenAICompatible(baseURL, apiKey, model string, extraHeaders map[string]string, timeoutSecs int) *OpenAICompatible {
+	opts := []option.RequestOption{
+		option.WithBaseURL(strings.TrimRight(baseURL, "/")),
+		option.WithAPIKey(apiKey),
+		option.WithMaxRetries(2),
+		option.WithRequestTimeout(20 * time.Second),
+	}
+	for k, v := range extraHeaders {
+		k, v := k, v
+		opts = append(opts, option.WithHeader(k, v))
+	}
+	timeout := 60 * time.Second
+	if timeoutSecs > 0 {
+		timeout = time.Duration(timeoutSecs) * time.Second
+	}
+	return &OpenAICompatible{
+		client:  openai.NewClient(opts...),
+		model:   model,
+		timeout: timeout,
+	}
+}
+
+// Generate calls the model with a system prompt pinning Cokuy's persona
+// (mediocre friend-circle guy: kind, calm, humble about uncertainty) plus
+// the conversation history. The overall deadline covers all retries.
+func (p *OpenAICompatible) Generate(ctx context.Context, msgs []Message) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, p.timeout)
+	defer cancel()
+
+	params := openai.ChatCompletionNewParams{
+		Model: p.model,
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.SystemMessage("You are Cokuy, the mediocre guy in the friend circle: casual, calm, kind, helpful without being overbearing. Never pretend certainty you do not have; say so when unsure. Keep replies short and practical."),
+		},
+	}
+	for _, m := range msgs {
+		text := strings.TrimSpace(m.Text)
+		if text == "" {
+			continue
+		}
+		switch m.Role {
+		case "user":
+			params.Messages = append(params.Messages, openai.UserMessage(text))
+		case "assistant":
+			params.Messages = append(params.Messages, openai.AssistantMessage(text))
+		default:
+			return "", fmt.Errorf("invalid message role %q", m.Role)
+		}
+	}
+
+	resp, err := p.client.Chat.Completions.New(ctx, params)
+	if err != nil {
+		return "", fmt.Errorf("llm generate: %w", err)
+	}
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("llm generate: no choices in response")
+	}
+	text := strings.TrimSpace(resp.Choices[0].Message.Content)
+	if text == "" {
+		return "", fmt.Errorf("llm generate: empty reply")
+	}
+	return text, nil
+}
