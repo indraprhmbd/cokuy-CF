@@ -8,12 +8,15 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"cokuy/internal/config"
 	"cokuy/internal/inference"
+	"cokuy/internal/metrics"
 	"cokuy/internal/runtime"
 	"cokuy/internal/storage"
 	"cokuy/internal/transport"
@@ -50,6 +53,25 @@ func run(log *slog.Logger) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Dashboard metrics: loopback only, bearer token, off when the token
+	// is empty. Never bind a public address here.
+	if cfg.MetricsToken != "" {
+		srv := &http.Server{Addr: cfg.MetricsAddr, Handler: metrics.New(db, cfg.MetricsToken).Handler()}
+		go func() {
+			log.Info("metrics listening", "addr", cfg.MetricsAddr)
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Error("metrics server failed", "err", err)
+			}
+		}()
+		defer func() {
+			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = srv.Shutdown(shutCtx)
+		}()
+	} else {
+		log.Info("metrics disabled (METRICS_TOKEN empty)")
+	}
 
 	log.Info("cokuy started, polling telegram")
 	updates := bot.Updates()

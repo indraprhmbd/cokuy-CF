@@ -3,7 +3,7 @@
 //	receive update -> allowlist -> claim update_id -> load minimal state ->
 //	call model -> validate writes -> persist -> reply -> mark processed.
 //
-// Explicit bounds: one LLM call per update, 20-message history window,
+// Explicit bounds: one LLM call per update, char-budgeted history window,
 // 4000-char input cap, provider-level timeout. No tool execution in v0.1,
 // so model output can only become reply text, never actions.
 package runtime
@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"log/slog"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"cokuy/internal/config"
@@ -21,8 +22,10 @@ import (
 )
 
 const (
-	// historyLimit bounds the context sent to the model per turn.
-	historyLimit = 20
+	// historyFetchLimit caps rows read per turn; historyBudgetChars caps
+	// what the model receives (newest-first), bounding cost per turn.
+	historyFetchLimit  = 40
+	historyBudgetChars = 10000
 	// maxInputChars bounds inbound text before persistence + inference.
 	maxInputChars = 4000
 	// maxReplyChars respects Telegram's 4096-char message cap with margin.
@@ -90,27 +93,41 @@ func (a *Agent) HandleUpdate(ctx context.Context, updateID int64, fromUserID, ch
 		log.Error("persist user message failed", "err", err)
 		return
 	}
-	history, err := storage.RecentMessages(ctx, a.db, convID, historyLimit)
+	history, err := storage.RecentMessages(ctx, a.db, convID, historyFetchLimit)
 	if err != nil {
 		log.Error("load history failed", "err", err)
 		return
 	}
+	history = budgetHistory(history, historyBudgetChars)
 
 	msgs := make([]inference.Message, 0, len(history))
 	for _, m := range history {
 		msgs = append(msgs, inference.Message{Role: m.Role, Text: m.Text})
 	}
+	start := time.Now()
 	reply, err := a.llm.Generate(ctx, msgs)
+	latencyMs := time.Since(start).Milliseconds()
 	if err != nil {
 		// Fail recoverably: the user message is already durable, so a
 		// later update can start a fresh turn. Tell the user plainly.
 		log.Error("llm failed", "err", err)
+		_ = storage.RecordTurnStat(ctx, a.db, storage.TurnStat{
+			UpdateID: updateID, Model: a.cfg.LLMModel, LatencyMs: latencyMs, Error: err.Error(),
+		})
 		_ = a.bot.SendReply(chatID, "Maaf, aku lagi gagal mikir. Coba lagi sebentar ya.")
 		return
+	}
+	var usage inference.Usage
+	if p, ok := a.llm.(*inference.OpenAICompatible); ok {
+		usage = p.LastUsage
+		log.Info("llm usage", "prompt_tokens", usage.Prompt, "completion_tokens", usage.Completion, "total_tokens", usage.Total)
 	}
 	reply = truncate(strings.TrimSpace(reply), maxReplyChars)
 	if reply == "" {
 		log.Error("empty model reply")
+		_ = storage.RecordTurnStat(ctx, a.db, storage.TurnStat{
+			UpdateID: updateID, Model: a.cfg.LLMModel, LatencyMs: latencyMs, Error: "empty model reply",
+		})
 		return
 	}
 	if err := storage.AppendMessage(ctx, a.db, convID, "assistant", reply); err != nil {
@@ -127,6 +144,32 @@ func (a *Agent) HandleUpdate(ctx context.Context, updateID int64, fromUserID, ch
 	if err := storage.MarkUpdateProcessed(ctx, a.db, updateID); err != nil {
 		log.Error("mark processed failed", "err", err)
 	}
+	_ = storage.RecordTurnStat(ctx, a.db, storage.TurnStat{
+		UpdateID:         updateID,
+		PromptTokens:     usage.Prompt,
+		CompletionTokens: usage.Completion,
+		TotalTokens:      usage.Total,
+		Model:            a.cfg.LLMModel,
+		LatencyMs:        latencyMs,
+	})
+}
+
+// budgetHistory keeps the newest messages fitting within maxChars (rune
+// count), always retaining at least the latest message.
+func budgetHistory(msgs []storage.Message, maxChars int) []storage.Message {
+	keep := 0
+	total := 0
+	for i := len(msgs) - 1; i >= 0; i-- {
+		total += utf8.RuneCountInString(msgs[i].Text)
+		if total > maxChars {
+			break
+		}
+		keep++
+	}
+	if keep == 0 && len(msgs) > 0 {
+		keep = 1
+	}
+	return msgs[len(msgs)-keep:]
 }
 
 func truncate(s string, max int) string {

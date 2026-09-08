@@ -42,6 +42,16 @@ type OpenAICompatible struct {
 	client  openai.Client
 	model   string
 	timeout time.Duration
+	// LastUsage holds token counts from the most recent Generate call,
+	// for per-turn cost visibility. Not safe for concurrent use.
+	LastUsage Usage
+}
+
+// Usage is prompt/completion token counts from one Generate call.
+type Usage struct {
+	Prompt     int64
+	Completion int64
+	Total      int64
 }
 
 // NewOpenAICompatible builds a provider from explicit values (env-supplied
@@ -69,16 +79,18 @@ func NewOpenAICompatible(baseURL, apiKey, model string, extraHeaders map[string]
 }
 
 // Generate calls the model with a system prompt pinning Cokuy's persona
-// (mediocre friend-circle guy: kind, calm, humble about uncertainty) plus
-// the conversation history. The overall deadline covers all retries.
+// (mediocre friend-circle guy: kind, calm, humble about uncertainty),
+// today's date (WIB), plus the conversation history. The overall deadline
+// covers all retries.
 func (p *OpenAICompatible) Generate(ctx context.Context, msgs []Message) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
+	today := time.Now().In(time.FixedZone("WIB", 7*3600)).Format("Monday, 2006-01-02")
 	params := openai.ChatCompletionNewParams{
 		Model: p.model,
 		Messages: []openai.ChatCompletionMessageParamUnion{
-			openai.SystemMessage("You are Cokuy, the mediocre guy in the friend circle: casual, calm, kind, helpful without being overbearing. Never pretend certainty you do not have; say so when unsure. Keep replies short and practical."),
+			openai.SystemMessage("You are Cokuy, the mediocre guy in the friend circle: casual, calm, kind, helpful without being overbearing. Never pretend certainty you do not have; say so when unsure. Keep replies short and practical. Today is " + today + " (WIB)."),
 		},
 	}
 	for _, m := range msgs {
@@ -102,6 +114,11 @@ func (p *OpenAICompatible) Generate(ctx context.Context, msgs []Message) (string
 	}
 	if len(resp.Choices) == 0 {
 		return "", fmt.Errorf("llm generate: no choices in response")
+	}
+	p.LastUsage = Usage{
+		Prompt:     resp.Usage.PromptTokens,
+		Completion: resp.Usage.CompletionTokens,
+		Total:      resp.Usage.TotalTokens,
 	}
 	text := strings.TrimSpace(resp.Choices[0].Message.Content)
 	if text == "" {

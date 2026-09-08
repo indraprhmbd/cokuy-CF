@@ -63,3 +63,52 @@ func TestConversationRoundTrip(t *testing.T) {
 		t.Fatalf("journal_mode = %q, want wal (DSN pragmas must apply)", journal)
 	}
 }
+
+func TestTurnStatsRoundTrip(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	if _, err := ClaimUpdate(ctx, db, 7); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if err := RecordTurnStat(ctx, db, TurnStat{
+		UpdateID: 7, PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120,
+		Model: "m", LatencyMs: 500,
+	}); err != nil {
+		t.Fatalf("record success: %v", err)
+	}
+	if _, err := ClaimUpdate(ctx, db, 8); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if err := RecordTurnStat(ctx, db, TurnStat{
+		UpdateID: 8, Model: "m", LatencyMs: 1000, Error: "boom",
+	}); err != nil {
+		t.Fatalf("record failure: %v", err)
+	}
+
+	tot, err := LifetimeTotals(ctx, db)
+	if err != nil {
+		t.Fatalf("totals: %v", err)
+	}
+	if tot.Turns != 2 || tot.TotalTokens != 120 || tot.Errors != 1 {
+		t.Fatalf("unexpected totals: %+v", tot)
+	}
+	daily, err := DailyUsage(ctx, db, 30)
+	if err != nil {
+		t.Fatalf("daily: %v", err)
+	}
+	if len(daily) != 1 || daily[0].Turns != 2 || daily[0].Errors != 1 {
+		t.Fatalf("unexpected daily: %+v", daily)
+	}
+	errs, err := RecentErrors(ctx, db, 10)
+	if err != nil {
+		t.Fatalf("errors: %v", err)
+	}
+	if len(errs) != 1 || errs[0].UpdateID != 8 || errs[0].Error != "boom" {
+		t.Fatalf("unexpected errors: %+v", errs)
+	}
+}

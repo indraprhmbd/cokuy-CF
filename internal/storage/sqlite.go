@@ -22,6 +22,9 @@ import (
 //go:embed migrations/001_init.sql
 var migration001 string
 
+//go:embed migrations/002_turn_stats.sql
+var migration002 string
+
 // Open opens the SQLite database at path, applies required PRAGMAs per
 // connection via the DSN, verifies connectivity, and runs migrations.
 func Open(path string) (*sql.DB, error) {
@@ -52,8 +55,12 @@ func Open(path string) (*sql.DB, error) {
 }
 
 func migrate(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx, migration001); err != nil {
-		return fmt.Errorf("apply migration 001: %w", err)
+	// Migrations are idempotent (IF NOT EXISTS), so applying in order is
+	// safe on every boot without a version-tracking table.
+	for i, m := range []string{migration001, migration002} {
+		if _, err := db.ExecContext(ctx, m); err != nil {
+			return fmt.Errorf("apply migration %03d: %w", i+1, err)
+		}
 	}
 	return nil
 }
@@ -144,4 +151,154 @@ func RecentMessages(ctx context.Context, db *sql.DB, conversationID int64, limit
 type Message struct {
 	Role string
 	Text string
+}
+
+// TurnStat is one recorded agent turn, success or failure. Error is empty
+// on success; token counts are zero when the model was never reached.
+type TurnStat struct {
+	UpdateID         int64
+	PromptTokens     int64
+	CompletionTokens int64
+	TotalTokens      int64
+	Model            string
+	LatencyMs        int64
+	Error            string
+}
+
+// RecordTurnStat persists one turn's stats for the monitoring dashboard.
+func RecordTurnStat(ctx context.Context, db *sql.DB, s TurnStat) error {
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO turn_stats(update_id, prompt_tokens, completion_tokens, total_tokens, model, latency_ms, error)
+		 VALUES (?,?,?,?,?,?,?)`,
+		s.UpdateID, s.PromptTokens, s.CompletionTokens, s.TotalTokens, s.Model, s.LatencyMs, s.Error); err != nil {
+		return fmt.Errorf("record turn stat: %w", err)
+	}
+	return nil
+}
+
+// DayUsage aggregates turn stats per UTC day, newest last.
+type DayUsage struct {
+	Day              string `json:"day"`
+	Turns            int64  `json:"turns"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
+	TotalTokens      int64  `json:"total_tokens"`
+	Errors           int64  `json:"errors"`
+}
+
+// DailyUsage returns per-day aggregates for the last days days.
+func DailyUsage(ctx context.Context, db *sql.DB, days int) ([]DayUsage, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT substr(created_at, 1, 10) AS day,
+			COUNT(*),
+			COALESCE(SUM(prompt_tokens),0),
+			COALESCE(SUM(completion_tokens),0),
+			COALESCE(SUM(total_tokens),0),
+			SUM(CASE WHEN error <> '' THEN 1 ELSE 0 END)
+		 FROM turn_stats
+		 WHERE created_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now', ?)
+		 GROUP BY day ORDER BY day`,
+		fmt.Sprintf("-%d days", days))
+	if err != nil {
+		return nil, fmt.Errorf("daily usage: %w", err)
+	}
+	defer rows.Close()
+	var out []DayUsage
+	for rows.Next() {
+		var d DayUsage
+		if err := rows.Scan(&d.Day, &d.Turns, &d.PromptTokens, &d.CompletionTokens, &d.TotalTokens, &d.Errors); err != nil {
+			return nil, fmt.Errorf("scan day usage: %w", err)
+		}
+		out = append(out, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate day usage: %w", err)
+	}
+	return out, nil
+}
+
+// Totals aggregates lifetime turn stats.
+type Totals struct {
+	Turns            int64 `json:"turns"`
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	TotalTokens      int64 `json:"total_tokens"`
+	Errors           int64 `json:"errors"`
+}
+
+// LifetimeTotals returns lifetime aggregates (zero rows when empty).
+func LifetimeTotals(ctx context.Context, db *sql.DB) (Totals, error) {
+	var t Totals
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*),
+			COALESCE(SUM(prompt_tokens),0),
+			COALESCE(SUM(completion_tokens),0),
+			COALESCE(SUM(total_tokens),0),
+			COALESCE(SUM(CASE WHEN error <> '' THEN 1 ELSE 0 END),0)
+		 FROM turn_stats`).Scan(&t.Turns, &t.PromptTokens, &t.CompletionTokens, &t.TotalTokens, &t.Errors); err != nil {
+		return Totals{}, fmt.Errorf("lifetime totals: %w", err)
+	}
+	return t, nil
+}
+
+// TurnError is one failed turn for the dashboard error log.
+type TurnError struct {
+	UpdateID  int64  `json:"update_id"`
+	Model     string `json:"model"`
+	Error     string `json:"error"`
+	CreatedAt string `json:"created_at"`
+}
+
+// RecentErrors returns the newest failed turns, newest first.
+func RecentErrors(ctx context.Context, db *sql.DB, limit int) ([]TurnError, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT update_id, model, error, created_at FROM turn_stats
+		 WHERE error <> '' ORDER BY update_id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("recent errors: %w", err)
+	}
+	defer rows.Close()
+	var out []TurnError
+	for rows.Next() {
+		var e TurnError
+		if err := rows.Scan(&e.UpdateID, &e.Model, &e.Error, &e.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan turn error: %w", err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate turn errors: %w", err)
+	}
+	return out, nil
+}
+
+// ConversationInfo summarizes one conversation for the dashboard.
+type ConversationInfo struct {
+	ChatID       int64  `json:"chat_id"`
+	Messages     int64  `json:"messages"`
+	LastActivity string `json:"last_activity"`
+}
+
+// ListConversations returns per-chat summaries, most recently active first.
+func ListConversations(ctx context.Context, db *sql.DB) ([]ConversationInfo, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT c.chat_id, COUNT(m.id), COALESCE(MAX(m.created_at), c.created_at)
+		 FROM conversations c LEFT JOIN messages m ON m.conversation_id = c.id
+		 GROUP BY c.id ORDER BY COALESCE(MAX(m.created_at), c.created_at) DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list conversations: %w", err)
+	}
+	defer rows.Close()
+	var out []ConversationInfo
+	for rows.Next() {
+		var c ConversationInfo
+		if err := rows.Scan(&c.ChatID, &c.Messages, &c.LastActivity); err != nil {
+			return nil, fmt.Errorf("scan conversation: %w", err)
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate conversations: %w", err)
+	}
+	return out, nil
 }

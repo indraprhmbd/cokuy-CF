@@ -25,6 +25,11 @@ type Config struct {
 	LLMModel        string
 	LLMExtraHeaders map[string]string
 	LLMTimeoutSecs  int
+
+	// MetricsAddr is the loopback listen address for the dashboard
+	// metrics endpoint. MetricsToken enables it; empty disables.
+	MetricsAddr  string
+	MetricsToken string
 }
 
 // Load reads and validates configuration from the environment.
@@ -78,6 +83,12 @@ func Load() (*Config, error) {
 		}
 		c.LLMTimeoutSecs = n
 	}
+
+	c.MetricsAddr = strings.TrimSpace(os.Getenv("METRICS_ADDR"))
+	if c.MetricsAddr == "" {
+		c.MetricsAddr = "127.0.0.1:8090"
+	}
+	c.MetricsToken = strings.TrimSpace(os.Getenv("METRICS_TOKEN"))
 	return c, nil
 }
 
