@@ -1,6 +1,7 @@
 # secrets / local env — never commit
 .env
 .env.*
+.dev.vars
 *.db
 *.db-wal
 *.db-shm
@@ -9,3 +10,4 @@ dist/
 node_modules/
 .svelte-kit/
 build/
+.wrangler/

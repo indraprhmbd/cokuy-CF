@@ -1,0 +1,3 @@
+# Local dev only. Never commit the real file.
+# Must match the secret_token passed to Telegram setWebhook.
+TELEGRAM_WEBHOOK_SECRET=replace-with-long-random-string
