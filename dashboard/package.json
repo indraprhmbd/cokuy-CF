@@ -22,7 +22,6 @@
 		"vite": "^6"
 	},
 	"dependencies": {
-		"@indaco/svelte-iconoir": "^1",
 		"bits-ui": "^1",
 		"clsx": "^2",
 		"mode-watcher": "^0.5",

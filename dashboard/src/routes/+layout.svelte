@@ -1,15 +1,19 @@
 <script lang="ts">
 	import '../app.css';
 	import { page } from '$app/state';
-	import { BarChart as BarChartIcon, Dashboard, List, MessageText } from '@indaco/svelte-iconoir';
 	import { ModeWatcher } from 'mode-watcher';
+	import Icon from '$lib/components/Icon.svelte';
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+	import activity from '$lib/icons/activity.json';
+	import dashboard from '$lib/icons/dashboard.json';
+	import list from '$lib/icons/list.json';
+	import messageText from '$lib/icons/message-text.json';
 	import { cn } from '$lib/utils';
 
 	const links = [
-		{ href: '/', label: 'Overview', icon: Dashboard },
-		{ href: '/conversations', label: 'Conversations', icon: MessageText },
-		{ href: '/logs', label: 'Logs', icon: List }
+		{ href: '/', label: 'Overview', icon: dashboard },
+		{ href: '/conversations', label: 'Conversations', icon: messageText },
+		{ href: '/logs', label: 'Logs', icon: list }
 	];
 </script>
 
@@ -29,14 +33,14 @@
 							: 'text-subtle hover:bg-canvas hover:text-ink'
 					)}
 				>
-					<svelte:component this={l.icon} size={16} />
+					<Icon data={l.icon} size={16} />
 					{l.label}
 				</a>
 			{/each}
 		</nav>
 		<div class="mt-auto flex items-center justify-between px-2 py-1 text-xs text-subtle">
 			<span class="flex items-center gap-1.5">
-				<BarChartIcon size={14} />
+				<Icon data={activity} size={14} />
 				local only
 			</span>
 			<ThemeToggle />

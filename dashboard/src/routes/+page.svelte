@@ -1,11 +1,15 @@
 <script lang="ts">
 	import type { PageData } from './$types';
-	import { ChatBubble, Coins, Flash, MessageText, WarningTriangle } from '@indaco/svelte-iconoir';
 	import AreaChart from '$lib/components/AreaChart.svelte';
 	import BarChart from '$lib/components/BarChart.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import StatCard from '$lib/components/StatCard.svelte';
 	import { compact, estCost } from '$lib/format';
+	import chatBubble from '$lib/icons/chat-bubble.json';
+	import coin from '$lib/icons/coin.json';
+	import flash from '$lib/icons/flash.json';
+	import messageText from '$lib/icons/message-text.json';
+	import warningTriangle from '$lib/icons/warning-triangle-outline.json';
 
 	let { data }: { data: PageData } = $props();
 	const m = $derived(data.metrics);
@@ -30,20 +34,20 @@
 </div>
 
 <div class="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-	<StatCard title="Turns" value={compact(m.totals.turns)} icon={ChatBubble} />
+	<StatCard title="Turns" value={compact(m.totals.turns)} icon={chatBubble} />
 	<StatCard
 		title="Tokens"
 		value={compact(m.totals.total_tokens)}
 		sub={estCost(m.totals.prompt_tokens, m.totals.completion_tokens) + ' est at promo rate'}
-		icon={Coins}
+		icon={coin}
 	/>
-	<StatCard title="Failed turns" value={String(m.totals.errors)} icon={WarningTriangle} />
-	<StatCard title="Active days" value={String(m.daily.length)} sub="last {data.days} days" icon={Flash} />
+	<StatCard title="Failed turns" value={String(m.totals.errors)} icon={warningTriangle} />
+	<StatCard title="Active days" value={String(m.daily.length)} sub="last {data.days} days" icon={flash} />
 	<StatCard
 		title="Chats"
 		value={String(m.conversations.length)}
 		sub={compact(m.conversations.reduce((a, c) => a + c.messages, 0)) + ' messages'}
-		icon={MessageText}
+		icon={messageText}
 	/>
 </div>
 

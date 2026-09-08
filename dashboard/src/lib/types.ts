@@ -1,4 +1,10 @@
 // Mirrors the Go /metrics payload (snake_case JSON from internal/metrics).
+// Vendored Iconoir path data (see src/lib/icons/*.json, MIT licensed).
+export interface IconData {
+	name: string;
+	data: Record<string, string | number | undefined>[];
+}
+
 export interface Totals {
 	turns: number;
 	prompt_tokens: number;

@@ -1,17 +1,18 @@
 <script lang="ts">
-	import type { Component } from 'svelte';
+	import type { IconData } from '$lib/types';
+	import Icon from './Icon.svelte';
 	import Card from './Card.svelte';
 
 	let {
 		title,
 		value,
 		sub = '',
-		icon: Icon
+		icon
 	}: {
 		title: string;
 		value: string;
 		sub?: string;
-		icon: Component;
+		icon: IconData;
 	} = $props();
 </script>
 
@@ -24,6 +25,6 @@
 		{/if}
 	</div>
 	<span class="rounded-md bg-raised p-2 text-accent">
-		<svelte:component this={Icon} size={18} />
+		<Icon data={icon} size={18} />
 	</span>
 </Card>

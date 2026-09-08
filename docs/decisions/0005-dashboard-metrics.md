@@ -41,6 +41,10 @@ Svelte-native, tree-shaken, sufficient for line/bar needs.
 - v1 deviation: hand-rolled SVG area/bar charts instead of LayerChart 2.
   Two charts do not justify a chart dependency; adopt LayerChart only
   when a chart need exceeds hand SVG (tooltips, zoom, stacked series).
+- Icons vendored (`dashboard/src/lib/icons/*.json`, MIT Iconoir data)
+  behind a local `Icon.svelte` renderer. Reason: `@indaco/svelte-iconoir`
+  is Svelte 3 era (stale exports map, no types, JSON-data API), which
+  broke the Svelte 5 build. Drop the dep entirely rather than fight it.
 
 - Public dashboard later: bind control + real auth (not bearer token).
 - If metric volume ever matters: aggregate rollups; personal scale
