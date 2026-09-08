@@ -87,10 +87,19 @@ Dashboard (SvelteKit, adapter-cloudflare) -> Workers Static Assets,
    001–003 `--remote`.
    Import VPS data: `sqlite3 .dump` → `wrangler d1 execute --file`
    (KBs, instant).
-3. Port storage funcs → `db/*.ts` (1:1, tested with miniflare local D1).
-4. Port agent turn + detector + Tick + briefing.
-5. Local test: `wrangler dev` + `cloudflared tunnel` for real webhook,
-   or POST sample updates.
+3. Port storage funcs → DONE (`worker/src/db.ts`, 1:1). Verified via
+   `wrangler dev` + local D1, not miniflare directly.
+4. Port agent turn + detector + Tick: DONE (`llm.ts`, `detect.ts`,
+   `turn.ts`, `tick.ts`, grammY Bot API client for sends). Briefing
+   deferred (parity A–D first, per loose end 4). Deviation: no
+   `webhookCallback` — webhook acks immediately and the turn runs in
+   `ctx.waitUntil` (webhookCallback awaits handlers and would hold the
+   200 through the LLM call).
+5. Local test: DONE. `wrangler dev` + POSTed sample updates (allowed
+   turn ran the full error path on dummy creds; stranger dropped;
+   non-message claimed+closed) + manual cron trigger (due reminder
+   flushed to outbox, failed send released the claim, reminder stayed
+   unsent). Smoke rows wiped from local D1 after.
 6. Cutover: `setWebhook?url=...&secret_token=...`. Rollback:
    `deleteWebhook` + `go run ./cmd/cokuy` — VPS binary untouched until
    CF proven (keep 1–2 weeks).

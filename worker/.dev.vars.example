@@ -1,3 +1,18 @@
-# Local dev only. Never commit the real file.
+# Local dev only. Copy to .dev.vars (gitignored) and fill in. Never commit the real file.
 # Must match the secret_token passed to Telegram setWebhook.
 TELEGRAM_WEBHOOK_SECRET=replace-with-long-random-string
+# Bot API token. Prod: `wrangler secret put BOT_TOKEN`.
+BOT_TOKEN=000000:replace-with-real-token
+# Public getMe result object as compact JSON (NOT a secret; skips getMe cold call).
+# Grab once: curl https://api.telegram.org/bot<TOKEN>/getMe -> store the "result" object.
+BOT_INFO={"id":0,"is_bot":true,"first_name":"cokuy","username":"cokuybot"}
+# Comma-separated numeric Telegram user IDs. Empty = nobody allowed.
+ALLOWED_USER_IDS=000000000
+# Any OpenAI-compatible endpoint. Prod key: `wrangler secret put LLM_API_KEY`.
+LLM_BASE_URL=https://ai.sumopod.com/v1
+LLM_API_KEY=replace-with-real-key
+LLM_MODEL=MiniMax-M2.7-highspeed
+# Optional JSON object, e.g. {"HTTP-Referer":"https://example.com","X-Title":"cokuy"} for OpenRouter.
+LLM_EXTRA_HEADERS=
+# Optional positive integer seconds (default 60).
+LLM_TIMEOUT_S=
