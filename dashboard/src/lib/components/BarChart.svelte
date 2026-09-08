@@ -50,8 +50,10 @@
 			vector-effect="non-scaling-stroke"
 		/>
 	</svg>
-	<div class="mt-1 flex justify-between text-xs text-subtle">
+	<div class="mt-1 flex text-xs text-subtle {data.length === 1 ? 'justify-center' : 'justify-between'}">
 		<span>{data[0].label}</span>
-		<span>{data[data.length - 1].label}</span>
+		{#if data.length > 1}
+			<span>{data[data.length - 1].label}</span>
+		{/if}
 	</div>
 {/if}

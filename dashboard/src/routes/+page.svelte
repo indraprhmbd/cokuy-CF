@@ -11,6 +11,9 @@
 	const tokens = $derived(m.daily.map((d) => ({ label: d.day.slice(5), value: d.total_tokens })));
 	const spend = $derived(m.daily.map((d) => ({ label: d.day.slice(5), value: d.cost_usd ?? 0 })));
 	const today = $derived(m.daily[m.daily.length - 1]);
+	const spendMissing = $derived(
+		m.totals.total_tokens > 0 && m.daily.every((d) => !d.cost_usd)
+	);
 	const avgPerDay = $derived(m.daily.length ? (m.totals.cost_usd ?? 0) / m.daily.length : 0);
 	const inPct = $derived(
 		m.totals.total_tokens ? Math.round((m.totals.prompt_tokens / m.totals.total_tokens) * 100) : 0
@@ -67,7 +70,13 @@
 	</Card>
 	<Card>
 		<h2 class="mb-2 text-sm font-medium">Spend per day</h2>
-		<BarChart data={spend} format={usd} />
+		{#if spendMissing}
+			<p class="py-8 text-center text-sm text-subtle">
+				Bot serves pre-spend metrics. Restart it to enable dollar tracking.
+			</p>
+		{:else}
+			<BarChart data={spend} format={usd} />
+		{/if}
 	</Card>
 </div>
 
