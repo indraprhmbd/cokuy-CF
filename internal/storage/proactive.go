@@ -272,3 +272,27 @@ func MarkOutboxSent(ctx context.Context, db *sql.DB, id int64) error {
 	}
 	return nil
 }
+
+// ReleaseOutboxClaim returns a claimed row to the pending pool so a later
+// tick retries it. Used when delivery is deferred (quiet hours, daily cap)
+// or the send failed: a claimed row would otherwise sit forever.
+func ReleaseOutboxClaim(ctx context.Context, db *sql.DB, id int64) error {
+	if _, err := db.ExecContext(ctx,
+		`UPDATE outbox SET claimed_at = NULL WHERE id = ? AND sent_at IS NULL`,
+		id); err != nil {
+		return fmt.Errorf("release outbox claim: %w", err)
+	}
+	return nil
+}
+
+// CountOutboxSentSince counts a chat's delivered proactive sends since the
+// given strftime-format UTC timestamp. Backs the daily per-chat cap.
+func CountOutboxSentSince(ctx context.Context, db *sql.DB, chatID int64, since string) (int, error) {
+	var n int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM outbox WHERE chat_id = ? AND sent_at IS NOT NULL AND sent_at >= ?`,
+		chatID, since).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count outbox sent: %w", err)
+	}
+	return n, nil
+}

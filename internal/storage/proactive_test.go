@@ -79,6 +79,52 @@ func TestRemindersDue(t *testing.T) {
 	}
 }
 
+func TestOutboxReleaseAndCapCount(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	if err := EnqueueOutbox(ctx, db, 1, "briefing", nil, "morning", "b:2026-09-09"); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	pending, err := PendingOutbox(ctx, db, 10)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending = %+v, %v", pending, err)
+	}
+	id := pending[0].ID
+	if ok, err := ClaimOutbox(ctx, db, id); err != nil || !ok {
+		t.Fatalf("claim = %v, %v", ok, err)
+	}
+	if err := ReleaseOutboxClaim(ctx, db, id); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	pending, err = PendingOutbox(ctx, db, 10)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending after release = %+v, %v; want 1", pending, err)
+	}
+	n, err := CountOutboxSentSince(ctx, db, 1, "2000-01-01T00:00:00.000Z")
+	if err != nil || n != 0 {
+		t.Fatalf("count before send = %d, %v; want 0", n, err)
+	}
+	if ok, err := ClaimOutbox(ctx, db, id); err != nil || !ok {
+		t.Fatalf("reclaim = %v, %v", ok, err)
+	}
+	if err := MarkOutboxSent(ctx, db, id); err != nil {
+		t.Fatalf("mark sent: %v", err)
+	}
+	n, err = CountOutboxSentSince(ctx, db, 1, "2000-01-01T00:00:00.000Z")
+	if err != nil || n != 1 {
+		t.Fatalf("count after send = %d, %v; want 1", n, err)
+	}
+	n, err = CountOutboxSentSince(ctx, db, 2, "2000-01-01T00:00:00.000Z")
+	if err != nil || n != 0 {
+		t.Fatalf("other chat count = %d, %v; want 0", n, err)
+	}
+}
+
 func TestOutboxClaimSend(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {

@@ -76,6 +76,22 @@ func run(log *slog.Logger) error {
 	log.Info("cokuy started, polling telegram")
 	updates := bot.Updates()
 	defer bot.Stop()
+	// Proactive scheduler: startup catch-up (flushes overnight dues that
+	// missed their window) then every 15 minutes. Tick is SQL-cheap when
+	// idle and gates sends behind quiet hours + daily cap.
+	go func() {
+		runtime.Tick(ctx, db, bot, llm, log, time.Now())
+		ticker := time.NewTicker(15 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				runtime.Tick(ctx, db, bot, llm, log, now)
+			}
+		}
+	}()
 	for {
 		select {
 		case <-ctx.Done():
