@@ -77,8 +77,14 @@ Dashboard (SvelteKit, adapter-cloudflare) -> Workers Static Assets,
 
 ## Migration + cutover (rollback trivial)
 
-1. `cokuy-cf/` scaffold: `npm create cloudflare`, Hono + grammY + types.
-2. Port schema: `wrangler d1 create`, apply 001–003 as D1 migrations.
+1. `worker/` scaffold: DONE (cb83a3b, manual files not
+   `npm create cloudflare`). Hono + `/health` + fail-closed `/telegram`
+   stub, D1 binding, 001–003 as D1 migrations (applied `--local` OK).
+   Notes: wrangler 4 needs `@cloudflare/workers-types@^5`;
+   `compatibility_date` can't be future; zero-UUID `database_id`
+   works for `--local` only.
+2. Port schema: `wrangler d1 create`, replace placeholder id, apply
+   001–003 `--remote`.
    Import VPS data: `sqlite3 .dump` → `wrangler d1 execute --file`
    (KBs, instant).
 3. Port storage funcs → `db/*.ts` (1:1, tested with miniflare local D1).
