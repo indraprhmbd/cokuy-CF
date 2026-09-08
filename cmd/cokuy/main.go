@@ -57,7 +57,7 @@ func run(log *slog.Logger) error {
 	// Dashboard metrics: loopback only, bearer token, off when the token
 	// is empty. Never bind a public address here.
 	if cfg.MetricsToken != "" {
-		srv := &http.Server{Addr: cfg.MetricsAddr, Handler: metrics.New(db, cfg.MetricsToken).Handler()}
+		srv := &http.Server{Addr: cfg.MetricsAddr, Handler: metrics.New(db, cfg.MetricsToken, cfg.LLMPriceInPerM, cfg.LLMPriceOutPerM).Handler()}
 		go func() {
 			log.Info("metrics listening", "addr", cfg.MetricsAddr)
 			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

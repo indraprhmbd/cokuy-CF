@@ -11,6 +11,7 @@ export interface Totals {
 	completion_tokens: number;
 	total_tokens: number;
 	errors: number;
+	cost_usd: number;
 }
 
 export interface DayUsage {
@@ -20,6 +21,7 @@ export interface DayUsage {
 	completion_tokens: number;
 	total_tokens: number;
 	errors: number;
+	cost_usd: number;
 }
 
 export interface TurnError {
@@ -35,9 +37,16 @@ export interface ConversationInfo {
 	last_activity: string;
 }
 
+export interface Pricing {
+	price_in_per_m: number;
+	price_out_per_m: number;
+	currency: string;
+}
+
 export interface MetricsPayload {
 	totals: Totals;
 	daily: DayUsage[];
 	recent_errors: TurnError[];
 	conversations: ConversationInfo[];
+	pricing: Pricing;
 }

@@ -19,14 +19,25 @@ import (
 
 // Server serves dashboard metrics from the agent database.
 type Server struct {
-	db    *sql.DB
-	token string
+	db      *sql.DB
+	token   string
+	pricing Pricing
+}
+
+// Pricing is the USD-per-1M-tokens rate the spend figures are computed
+// with, echoed so the dashboard can label which rate dollars assume.
+type Pricing struct {
+	PriceInPerM  float64 `json:"price_in_per_m"`
+	PriceOutPerM float64 `json:"price_out_per_m"`
+	Currency     string  `json:"currency"`
 }
 
 // New wires a metrics server. Token must be non-empty; callers refuse to
 // start the HTTP listener otherwise.
-func New(db *sql.DB, token string) *Server {
-	return &Server{db: db, token: token}
+func New(db *sql.DB, token string, priceInPerM, priceOutPerM float64) *Server {
+	return &Server{db: db, token: token, pricing: Pricing{
+		PriceInPerM: priceInPerM, PriceOutPerM: priceOutPerM, Currency: "USD",
+	}}
 }
 
 // Handler returns the metrics mux. Only GET /metrics exists.
@@ -42,6 +53,13 @@ type Payload struct {
 	Daily         []storage.DayUsage         `json:"daily"`
 	RecentErrors  []storage.TurnError        `json:"recent_errors"`
 	Conversations []storage.ConversationInfo `json:"conversations"`
+	Pricing       Pricing                    `json:"pricing"`
+}
+
+// cost converts token counts to USD at the server's pricing.
+func (s *Server) cost(promptTokens, completionTokens int64) float64 {
+	return (float64(promptTokens)*s.pricing.PriceInPerM +
+		float64(completionTokens)*s.pricing.PriceOutPerM) / 1_000_000
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
@@ -94,12 +112,18 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		conversations = []storage.ConversationInfo{}
 	}
 
+	totals.CostUSD = s.cost(totals.PromptTokens, totals.CompletionTokens)
+	for i := range daily {
+		daily[i].CostUSD = s.cost(daily[i].PromptTokens, daily[i].CompletionTokens)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(Payload{
 		Totals:        totals,
 		Daily:         daily,
 		RecentErrors:  recentErrors,
 		Conversations: conversations,
+		Pricing:       s.pricing,
 	})
 }
 

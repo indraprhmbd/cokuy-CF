@@ -45,6 +45,14 @@ Svelte-native, tree-shaken, sufficient for line/bar needs.
   behind a local `Icon.svelte` renderer. Reason: `@indaco/svelte-iconoir`
   is Svelte 3 era (stale exports map, no types, JSON-data API), which
   broke the Svelte 5 build. Drop the dep entirely rather than fight it.
+  Sidebar nav keeps icons; overview StatCards dropped them (decorative
+  glyphs added noise, not signal).
+- Spend is server-computed, not client-estimated: `/metrics` returns
+  `cost_usd` on totals + daily rows plus the `pricing` it assumed, priced
+  by `LLM_PRICE_IN_PER_M` / `LLM_PRICE_OUT_PER_M` env (defaults Sumopod
+  promo $0.03/$0.12). Pricing changes are an env edit, never a migration;
+  historical dollars re-price at the current rate, which is documented in
+  the payload so the dashboard labels the assumed rate.
 
 - Public dashboard later: bind control + real auth (not bearer token).
 - If metric volume ever matters: aggregate rollups; personal scale

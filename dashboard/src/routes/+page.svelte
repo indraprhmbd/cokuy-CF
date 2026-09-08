@@ -4,17 +4,20 @@
 	import BarChart from '$lib/components/BarChart.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import StatCard from '$lib/components/StatCard.svelte';
-	import { compact, estCost } from '$lib/format';
-	import chatBubble from '$lib/icons/chat-bubble.json';
-	import coin from '$lib/icons/coin.json';
-	import flash from '$lib/icons/flash.json';
-	import messageText from '$lib/icons/message-text.json';
-	import warningTriangle from '$lib/icons/warning-triangle-outline.json';
+	import { compact, usd } from '$lib/format';
 
 	let { data }: { data: PageData } = $props();
 	const m = $derived(data.metrics);
 	const tokens = $derived(m.daily.map((d) => ({ label: d.day.slice(5), value: d.total_tokens })));
-	const turns = $derived(m.daily.map((d) => ({ label: d.day.slice(5), value: d.turns })));
+	const spend = $derived(m.daily.map((d) => ({ label: d.day.slice(5), value: d.cost_usd })));
+	const today = $derived(m.daily[m.daily.length - 1]);
+	const avgPerDay = $derived(m.daily.length ? m.totals.cost_usd / m.daily.length : 0);
+	const inPct = $derived(
+		m.totals.total_tokens ? Math.round((m.totals.prompt_tokens / m.totals.total_tokens) * 100) : 0
+	);
+	const rate = $derived(
+		`$${m.pricing.price_in_per_m} in / $${m.pricing.price_out_per_m} out per 1M`
+	);
 </script>
 
 <div class="mb-4 flex items-center justify-between">
@@ -34,20 +37,26 @@
 </div>
 
 <div class="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-	<StatCard title="Turns" value={compact(m.totals.turns)} icon={chatBubble} />
+	<StatCard title="Spend total" value={usd(m.totals.cost_usd)} sub={rate} />
 	<StatCard
-		title="Tokens"
-		value={compact(m.totals.total_tokens)}
-		sub={estCost(m.totals.prompt_tokens, m.totals.completion_tokens) + ' est at promo rate'}
-		icon={coin}
+		title="Spend today"
+		value={usd(today ? today.cost_usd : 0)}
+		sub="{usd(avgPerDay)} avg per active day"
 	/>
-	<StatCard title="Failed turns" value={String(m.totals.errors)} icon={warningTriangle} />
-	<StatCard title="Active days" value={String(m.daily.length)} sub="last {data.days} days" icon={flash} />
 	<StatCard
-		title="Chats"
-		value={String(m.conversations.length)}
-		sub={compact(m.conversations.reduce((a, c) => a + c.messages, 0)) + ' messages'}
-		icon={messageText}
+		title="Tokens in"
+		value={compact(m.totals.prompt_tokens)}
+		sub="{inPct}% of {compact(m.totals.total_tokens)} total"
+	/>
+	<StatCard
+		title="Tokens out"
+		value={compact(m.totals.completion_tokens)}
+		sub="{100 - inPct}% of {compact(m.totals.total_tokens)} total"
+	/>
+	<StatCard
+		title="Turns"
+		value={compact(m.totals.turns)}
+		sub="{m.totals.errors} failed · {m.conversations.length} chats"
 	/>
 </div>
 
@@ -57,8 +66,8 @@
 		<AreaChart data={tokens} />
 	</Card>
 	<Card>
-		<h2 class="mb-2 text-sm font-medium">Turns per day</h2>
-		<BarChart data={turns} />
+		<h2 class="mb-2 text-sm font-medium">Spend per day</h2>
+		<BarChart data={spend} format={usd} />
 	</Card>
 </div>
 

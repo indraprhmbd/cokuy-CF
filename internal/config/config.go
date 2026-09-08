@@ -25,6 +25,12 @@ type Config struct {
 	LLMModel        string
 	LLMExtraHeaders map[string]string
 	LLMTimeoutSecs  int
+	// LLMPriceInPerM / LLMPriceOutPerM are USD per 1M tokens, used for
+	// server-side spend reporting. Defaults track the Sumopod promo
+	// rate for MiniMax-M2.7-highspeed; override when model or promo
+	// changes so dashboard dollars stay honest.
+	LLMPriceInPerM  float64
+	LLMPriceOutPerM float64
 
 	// MetricsAddr is the loopback listen address for the dashboard
 	// metrics endpoint. MetricsToken enables it; empty disables.
@@ -84,6 +90,16 @@ func Load() (*Config, error) {
 		c.LLMTimeoutSecs = n
 	}
 
+	priceIn, err := parsePricePerM(os.Getenv("LLM_PRICE_IN_PER_M"), 0.03)
+	if err != nil {
+		return nil, err
+	}
+	priceOut, err := parsePricePerM(os.Getenv("LLM_PRICE_OUT_PER_M"), 0.12)
+	if err != nil {
+		return nil, err
+	}
+	c.LLMPriceInPerM, c.LLMPriceOutPerM = priceIn, priceOut
+
 	c.MetricsAddr = strings.TrimSpace(os.Getenv("METRICS_ADDR"))
 	if c.MetricsAddr == "" {
 		c.MetricsAddr = "127.0.0.1:8090"
@@ -96,6 +112,19 @@ func Load() (*Config, error) {
 func (c *Config) IsAllowed(userID int64) bool {
 	_, ok := c.AllowedUserIDs[userID]
 	return ok
+}
+
+// parsePricePerM reads USD-per-1M-tokens, falling back to def when unset.
+func parsePricePerM(raw string, def float64) (float64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return def, nil
+	}
+	f, err := strconv.ParseFloat(raw, 64)
+	if err != nil || f < 0 {
+		return 0, fmt.Errorf("price per 1M tokens must be a non-negative number, got %q", raw)
+	}
+	return f, nil
 }
 
 func parseAllowlist(raw string) (map[int64]struct{}, error) {

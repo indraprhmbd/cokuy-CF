@@ -5,9 +5,9 @@ export function compact(n: number): string {
 	return String(n);
 }
 
-// Estimated spend at the Sumopod promo rate (per 1M tokens).
-export function estCost(prompt: number, completion: number): string {
-	const usd = (prompt * 0.03 + completion * 0.12) / 1_000_000;
-	if (usd < 0.01) return '<$0.01';
-	return '$' + usd.toFixed(2);
+// USD formatting for server-computed spend (cost_usd in the payload).
+export function usd(v: number): string {
+	if (v < 0.01) return '<$0.01';
+	if (v < 1000) return '$' + v.toFixed(2);
+	return '$' + v.toFixed(0);
 }

@@ -28,7 +28,7 @@ func testServer(t *testing.T) *Server {
 	}); err != nil {
 		t.Fatalf("record: %v", err)
 	}
-	return New(db, "secret")
+	return New(db, "secret", 0.03, 0.12)
 }
 
 func TestMetricsRequiresAuth(t *testing.T) {
@@ -72,8 +72,18 @@ func TestMetricsPayload(t *testing.T) {
 	if p.Totals.Turns != 1 || p.Totals.TotalTokens != 15 {
 		t.Fatalf("unexpected totals: %+v", p.Totals)
 	}
+	// 10 prompt @ $0.03/M + 5 completion @ $0.12/M = $0.90/M tokens.
+	if want := 0.9 / 1_000_000; p.Totals.CostUSD < want*0.999 || p.Totals.CostUSD > want*1.001 {
+		t.Fatalf("cost_usd = %v, want ~%v", p.Totals.CostUSD, want)
+	}
+	if p.Pricing.PriceInPerM != 0.03 || p.Pricing.PriceOutPerM != 0.12 || p.Pricing.Currency != "USD" {
+		t.Fatalf("unexpected pricing: %+v", p.Pricing)
+	}
 	if len(p.Daily) != 1 || p.Daily[0].Turns != 1 {
 		t.Fatalf("unexpected daily: %+v", p.Daily)
+	}
+	if p.Daily[0].CostUSD != p.Totals.CostUSD {
+		t.Fatalf("daily cost %v != totals cost %v", p.Daily[0].CostUSD, p.Totals.CostUSD)
 	}
 }
 

@@ -4,7 +4,8 @@
 		value: number;
 	}
 
-	let { data }: { data: Point[] } = $props();
+	let { data, format = (v: number) => String(v) }: { data: Point[]; format?: (v: number) => string } =
+		$props();
 
 	const W = 600;
 	const H = 200;
@@ -36,7 +37,7 @@
 				fill="var(--color-accent)"
 				opacity={d.value > 0 ? 0.85 : 0.2}
 			>
-				<title>{d.label}: {d.value}</title>
+				<title>{d.label}: {format(d.value)}</title>
 			</rect>
 		{/each}
 		<line

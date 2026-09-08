@@ -176,14 +176,16 @@ func RecordTurnStat(ctx context.Context, db *sql.DB, s TurnStat) error {
 	return nil
 }
 
-// DayUsage aggregates turn stats per UTC day, newest last.
+// DayUsage aggregates turn stats per UTC day, newest last. CostUSD is
+// filled by the metrics layer from current pricing, not stored.
 type DayUsage struct {
-	Day              string `json:"day"`
-	Turns            int64  `json:"turns"`
-	PromptTokens     int64  `json:"prompt_tokens"`
-	CompletionTokens int64  `json:"completion_tokens"`
-	TotalTokens      int64  `json:"total_tokens"`
-	Errors           int64  `json:"errors"`
+	Day              string  `json:"day"`
+	Turns            int64   `json:"turns"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	TotalTokens      int64   `json:"total_tokens"`
+	Errors           int64   `json:"errors"`
+	CostUSD          float64 `json:"cost_usd"`
 }
 
 // DailyUsage returns per-day aggregates for the last days days.
@@ -217,13 +219,15 @@ func DailyUsage(ctx context.Context, db *sql.DB, days int) ([]DayUsage, error) {
 	return out, nil
 }
 
-// Totals aggregates lifetime turn stats.
+// Totals aggregates lifetime turn stats. CostUSD is filled by the
+// metrics layer from current pricing, not stored.
 type Totals struct {
-	Turns            int64 `json:"turns"`
-	PromptTokens     int64 `json:"prompt_tokens"`
-	CompletionTokens int64 `json:"completion_tokens"`
-	TotalTokens      int64 `json:"total_tokens"`
-	Errors           int64 `json:"errors"`
+	Turns            int64   `json:"turns"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	TotalTokens      int64   `json:"total_tokens"`
+	Errors           int64   `json:"errors"`
+	CostUSD          float64 `json:"cost_usd"`
 }
 
 // LifetimeTotals returns lifetime aggregates (zero rows when empty).
