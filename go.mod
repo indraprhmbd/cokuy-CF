@@ -3,6 +3,7 @@ module cokuy
 go 1.25.0
 
 require (
+	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
 	github.com/openai/openai-go v1.12.0
 	modernc.org/sqlite v1.58.0
 )

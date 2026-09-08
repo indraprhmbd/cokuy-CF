@@ -1,0 +1,30 @@
+[Unit]
+Description=Cokuy personal agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cokuy
+Group=cokuy
+WorkingDirectory=/var/lib/cokuy
+ExecStart=/opt/cokuy/cokuy
+EnvironmentFile=/opt/cokuy/cokuy.env
+Restart=always
+RestartSec=5
+
+# Sandbox: writable only where state lives (/var/lib/cokuy via
+# StateDirectory), no privilege escalation, minimal kernel surface.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSNamespaces=true
+LockPersonality=true
+StateDirectory=cokuy
+StateDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target
