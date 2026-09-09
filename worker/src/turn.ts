@@ -200,7 +200,7 @@ export async function handleUpdate(
     const latencyMs = Date.now() - started;
     log("error", "llm failed", { err: String(err) });
     await recordTurnStat(env.DB, {
-      updateId, promptTokens: 0, completionTokens: 0, totalTokens: 0,
+      updateId, kind: "chat", promptTokens: 0, completionTokens: 0, totalTokens: 0,
       model: llm.modelName, latencyMs, error: String(err),
     }).catch((e) => log("error", "record stat failed", { err: String(e) }));
     await sender.sendReply(chatId, "Maaf, aku lagi gagal mikir. Coba lagi sebentar ya.").catch((e) =>
@@ -224,7 +224,7 @@ export async function handleUpdate(
   if (!reply) {
     log("error", "empty model reply");
     await recordTurnStat(env.DB, {
-      updateId, promptTokens: usage.prompt, completionTokens: usage.completion,
+      updateId, kind: "chat", promptTokens: usage.prompt, completionTokens: usage.completion,
       totalTokens: usage.total, model: llm.modelName, latencyMs, error: "empty model reply",
     }).catch((e) => log("error", "record stat failed", { err: String(e) }));
     return;
@@ -247,20 +247,21 @@ export async function handleUpdate(
     log("error", "mark processed failed", { err: String(err) }),
   );
   await recordTurnStat(env.DB, {
-    updateId, promptTokens: usage.prompt, completionTokens: usage.completion,
+    updateId, kind: "chat", promptTokens: usage.prompt, completionTokens: usage.completion,
     totalTokens: usage.total, model: llm.modelName, latencyMs, error: "",
   }).catch((err) => log("error", "record stat failed", { err: String(err) }));
 
   // Post-turn extraction: never delays the user; failures only log.
-  await detectAndApply(env, llm, chatId, text, reply, log);
+  await detectAndApply(env, llm, updateId, chatId, text, reply, log);
   // Rolling compaction, same waitUntil budget: cheap SQL-first check keeps
   // idle turns at ~zero cost; the LLM call fires only past threshold.
-  await compactIfNeeded(env, llm, convId, priorSummary, log);
+  await compactIfNeeded(env, llm, updateId, convId, priorSummary, log);
 }
 
 async function detectAndApply(
   env: Env,
   llm: OpenAICompatible,
+  updateId: number,
   chatId: number,
   userText: string,
   assistantReply: string,
@@ -281,6 +282,19 @@ async function detectAndApply(
   }
   const sys = buildDetectPrompt(open);
   const user = `USER:\n${userText}\nASSISTANT:\n${assistantReply}`;
+  // Accumulate machine-call usage so the ledger shows true per-turn cost.
+  const used = { prompt: 0, completion: 0, total: 0 };
+  const started = Date.now();
+  const snapUsage = () => {
+    used.prompt += llm.lastUsage.prompt;
+    used.completion += llm.lastUsage.completion;
+    used.total += llm.lastUsage.total;
+  };
+  const recordDetect = (error: string) =>
+    recordTurnStat(env.DB, {
+      updateId, kind: "detect", promptTokens: used.prompt, completionTokens: used.completion,
+      totalTokens: used.total, model: llm.modelName, latencyMs: Date.now() - started, error,
+    }).catch((e) => log("warn", "record detect stat failed", { err: String(e) }));
   let raw: string;
   let toolArgs: string | null;
   try {
@@ -288,8 +302,10 @@ async function detectAndApply(
       responseFormat: { type: "json_object" },
       tools: [RECORD_STATE_TOOL as unknown as Record<string, unknown>],
     }));
+    snapUsage();
   } catch (err) {
     log("warn", "detect: extraction call failed", { err: String(err) });
+    await recordDetect(String(err));
     return;
   }
   let parsed;
@@ -304,13 +320,16 @@ async function detectAndApply(
         user,
         { temperature: 0.2, maxTokens: 500 },
       ));
+      snapUsage();
       parsed = parseDetection(raw, open, toolArgs);
     } catch (err2) {
       log("warn", "detect: invalid extraction output", { err: String(err2) });
+      await recordDetect(String(err2));
       return;
     }
   }
   const det = parsed.det;
+  await recordDetect("");
   for (const id of det.closeIds) {
     await closeLoop(env.DB, id, chatId).catch((err) =>
       log("warn", "detect: close loop failed", { id, err: String(err) }),
@@ -353,6 +372,7 @@ async function detectAndApply(
 async function compactIfNeeded(
   env: Env,
   llm: OpenAICompatible,
+  updateId: number,
   convId: number,
   priorSummary: string,
   log: (level: "info" | "warn" | "error", msg: string, extra?: object) => void,
@@ -391,6 +411,7 @@ async function compactIfNeeded(
     lines.join("\n");
   input = truncate(input, 12000);
   let next: string;
+  const sumStarted = Date.now();
   try {
     next = (
       await llm.generateStructured(
@@ -419,5 +440,10 @@ async function compactIfNeeded(
     log("warn", "compact: save failed", { err: String(err) });
     return;
   }
+  const u = llm.lastUsage;
+  await recordTurnStat(env.DB, {
+    updateId, kind: "summary", promptTokens: u.prompt, completionTokens: u.completion,
+    totalTokens: u.total, model: llm.modelName, latencyMs: Date.now() - sumStarted, error: "",
+  }).catch((err) => log("warn", "compact: record stat failed", { err: String(err) }));
   log("info", "compact: summary advanced", { through: throughId, chars: [...next].length });
 }

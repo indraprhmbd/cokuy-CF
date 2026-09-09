@@ -11,6 +11,8 @@ export interface ChatMessage {
 
 export interface TurnStat {
   updateId: number;
+  /** 'chat' | 'detect' | 'summary' | 'nudge'. Composite PK with updateId. */
+  kind: string;
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
@@ -192,11 +194,19 @@ export async function upsertConversationSummary(
 export async function recordTurnStat(db: D1Database, s: TurnStat): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO turn_stats(update_id, prompt_tokens, completion_tokens, total_tokens, model, latency_ms, error)
-       VALUES (?,?,?,?,?,?,?)`,
+      `INSERT INTO turn_stats(update_id, kind, prompt_tokens, completion_tokens, total_tokens, model, latency_ms, error)
+       VALUES (?,?,?,?,?,?,?,?)
+       ON CONFLICT(update_id, kind) DO UPDATE SET
+         prompt_tokens = excluded.prompt_tokens,
+         completion_tokens = excluded.completion_tokens,
+         total_tokens = excluded.total_tokens,
+         model = excluded.model,
+         latency_ms = excluded.latency_ms,
+         error = excluded.error`,
     )
     .bind(
       s.updateId,
+      s.kind,
       s.promptTokens,
       s.completionTokens,
       s.totalTokens,

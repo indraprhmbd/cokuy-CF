@@ -100,7 +100,7 @@ export class OpenAICompatible {
     userPrompt: string,
     opts: CompleteOptions = {},
   ): Promise<{ text: string; toolArgs: string | null }> {
-    const { text, toolArgs } = await this.complete(
+    const { text, toolArgs, usage } = await this.complete(
       [
         { role: "system", text: sysPrompt },
         { role: "user", text: userPrompt },
@@ -108,6 +108,7 @@ export class OpenAICompatible {
       opts,
     );
     if (!text && !toolArgs) throw new Error("llm structured: empty reply");
+    this.lastUsage = usage;
     return { text, toolArgs };
   }
 

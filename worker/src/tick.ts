@@ -17,6 +17,7 @@ import {
   markOutboxSent,
   markReminderSent,
   pendingOutbox,
+  recordTurnStat,
   releaseOutboxClaim,
   touchLoopNudged,
   type OutboxMessage,
@@ -107,6 +108,7 @@ async function enqueueNudges(env: Env, llm: OpenAICompatible, now: Date): Promis
   const { date } = wibParts(now);
   for (const l of due) {
     let text: string;
+    const draftStarted = Date.now();
     try {
       text = (
         await llm.generateStructured(
@@ -115,6 +117,12 @@ async function enqueueNudges(env: Env, llm: OpenAICompatible, now: Date): Promis
           `Unfinished thread: ${l.title}\nDetail: ${l.context}`,
         )
       ).text.trim();
+      const u = llm.lastUsage;
+      // Cron rows use update_id 0: no Telegram update exists there.
+      await recordTurnStat(env.DB, {
+        updateId: 0, kind: "nudge", promptTokens: u.prompt, completionTokens: u.completion,
+        totalTokens: u.total, model: llm.modelName, latencyMs: Date.now() - draftStarted, error: "",
+      }).catch((e) => log("warn", "tick: record nudge stat failed", { err: String(e) }));
     } catch (err) {
       log("warn", "tick: nudge draft failed", { loop_id: l.id, err: String(err) });
       continue;
