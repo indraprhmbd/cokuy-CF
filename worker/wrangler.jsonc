@@ -4,7 +4,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-08",
   "vars": {
-    "ALLOWED_USER_IDS": "000000000,000000000",
+    "ALLOWED_USER_IDS": "000000000,000000000,000000000",
     "LLM_BASE_URL": "https://gateway.ai.cloudflare.com/v1/<CLOUDFLARE_ACCOUNT_ID>/cokuy/custom-sumopod/v1",
     "LLM_MODEL": "MiniMax-M2.7-highspeed"
   },
