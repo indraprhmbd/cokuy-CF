@@ -57,7 +57,11 @@ export class OpenAICompatible {
   }
 
   /** Chat turn with the Cokuy persona prompt + history. Captures usage. */
-  async generate(history: Array<{ role: string; text: string }>, profileBlock?: string): Promise<string> {
+  async generate(
+    history: Array<{ role: string; text: string }>,
+    profileBlock?: string,
+    summaryBlock?: string,
+  ): Promise<string> {
     let system =
       "You are Cokuy, the mediocre guy in the friend circle: casual, calm, kind, " +
       "helpful without being overbearing. Never pretend certainty you do not have; " +
@@ -75,6 +79,7 @@ export class OpenAICompatible {
       "demonstrate the ability instead. " +
       `Today is ${wibToday(new Date())} (WIB).`;
     if (profileBlock?.trim()) system += ` ${profileBlock.trim()}`;
+    if (summaryBlock?.trim()) system += ` ${summaryBlock.trim()}`;
     const messages: LlmMessage[] = [{ role: "system", text: system }];
     for (const m of history) {
       const text = m.text.trim();

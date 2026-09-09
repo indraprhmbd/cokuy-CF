@@ -14,13 +14,17 @@ import {
   claimUpdate,
   closeLoop,
   createReminder,
+  getConversationSummary,
   getOrCreateConversation,
   getProfileFacts,
   markUpdateProcessed,
+  messagesChunk,
   openLoopOrExisting,
   openLoops,
-  recentMessages,
+  recentMessagesAfter,
   recordTurnStat,
+  unsummarizedSpan,
+  upsertConversationSummary,
   upsertProfileFact,
 } from "./db";
 import { detectSystemPrompt as buildDetectPrompt, parseDetection, RECORD_STATE_TOOL } from "./detect";
@@ -28,6 +32,11 @@ import { sanitizeReply } from "./sanitize";
 
 const HISTORY_FETCH_LIMIT = 40;
 const HISTORY_BUDGET_CHARS = 10000;
+/** Rolling summary: compact once unsummarized rows pass this count. */
+const SUMMARIZE_THRESHOLD = 60;
+/** Messages left untouched above the new watermark after compaction. */
+const SUMMARIZE_KEEP_RECENT = 30;
+const SUMMARY_MAX_CHARS = 1500;
 const MAX_INPUT_CHARS = 4000;
 /** Telegram caps messages at 4096 chars; keep margin. */
 const MAX_REPLY_CHARS = 4000;
@@ -146,8 +155,14 @@ export async function handleUpdate(
     return;
   }
   let history: Array<{ role: string; text: string }>;
+  let priorSummary = "";
   try {
-    history = budgetHistory(await recentMessages(env.DB, convId, HISTORY_FETCH_LIMIT), HISTORY_BUDGET_CHARS);
+    const s = await getConversationSummary(env.DB, convId);
+    priorSummary = s.summary.trim();
+    history = budgetHistory(
+      await recentMessagesAfter(env.DB, convId, s.throughMessageId, HISTORY_FETCH_LIMIT),
+      HISTORY_BUDGET_CHARS,
+    );
   } catch (err) {
     log("error", "load history failed", { err: String(err) });
     return;
@@ -166,6 +181,12 @@ export async function handleUpdate(
     log("warn", "load profile failed", { err: String(err) });
   }
 
+  // Rolling summary is injected whole (tiny, ~1.5k chars max); the live
+  // window above the watermark carries verbatim turns.
+  const summaryBlock = priorSummary
+    ? "Earlier conversation (summarized, oldest first): " + priorSummary
+    : "";
+
   const started = Date.now();
   sender.sendTyping(chatId).catch((err) => log("warn", "typing indicator failed", { err: String(err) }));
   const typer = setInterval(() => {
@@ -173,7 +194,7 @@ export async function handleUpdate(
   }, TYPING_INTERVAL_MS);
   let reply: string;
   try {
-    reply = await llm.generate(history, profileBlock);
+    reply = await llm.generate(history, profileBlock, summaryBlock);
   } catch (err) {
     clearInterval(typer);
     const latencyMs = Date.now() - started;
@@ -232,6 +253,9 @@ export async function handleUpdate(
 
   // Post-turn extraction: never delays the user; failures only log.
   await detectAndApply(env, llm, chatId, text, reply, log);
+  // Rolling compaction, same waitUntil budget: cheap SQL-first check keeps
+  // idle turns at ~zero cost; the LLM call fires only past threshold.
+  await compactIfNeeded(env, llm, convId, priorSummary, log);
 }
 
 async function detectAndApply(
@@ -314,6 +338,86 @@ async function detectAndApply(
   }
   log("info", "detect: applied", {
     loops: det.loops.length, closed: det.closeIds.length, reminders: det.reminders.length,
-    profile: det.profile.length, dropped: parsed.dropped,
+    profile: det.profile.length,
   });
+}
+
+/**
+ * M3 rolling summary. When unsummarized rows pass SUMMARIZE_THRESHOLD,
+ * compacts the oldest down to SUMMARIZE_KEEP_RECENT into
+ * conversation_summaries and advances the watermark. Input is the prior
+ * summary plus newly-aged messages only: the summary is never
+ * re-summarized from scratch, and verbatim rows stay in messages (the
+ * watermark only narrows the injected window).
+ */
+async function compactIfNeeded(
+  env: Env,
+  llm: OpenAICompatible,
+  convId: number,
+  priorSummary: string,
+  log: (level: "info" | "warn" | "error", msg: string, extra?: object) => void,
+): Promise<void> {
+  let current;
+  try {
+    current = await getConversationSummary(env.DB, convId);
+  } catch (err) {
+    log("warn", "compact: load summary failed", { err: String(err) });
+    return;
+  }
+  let span;
+  try {
+    span = await unsummarizedSpan(env.DB, convId, current.throughMessageId);
+  } catch (err) {
+    log("warn", "compact: span check failed", { err: String(err) });
+    return;
+  }
+  if (span.count <= SUMMARIZE_THRESHOLD) return;
+  const compactCount = span.count - SUMMARIZE_KEEP_RECENT;
+  let chunk;
+  try {
+    chunk = await messagesChunk(env.DB, convId, current.throughMessageId, span.maxId, compactCount);
+  } catch (err) {
+    log("warn", "compact: load chunk failed", { err: String(err) });
+    return;
+  }
+  if (chunk.length === 0) return;
+  const lines = chunk.map((m) =>
+    `${m.role === "user" ? "USER" : "COKUY"}: ${truncate(m.text.trim(), 1000)}`,
+  );
+  let input =
+    "PRIOR SUMMARY (may be empty, trust it, do not re-derive):\n" +
+    (current.summary.trim() || "(none)") +
+    "\n\nNEW MESSAGES (oldest first, summarize these into the prior):\n" +
+    lines.join("\n");
+  input = truncate(input, 12000);
+  let next: string;
+  try {
+    next = (
+      await llm.generateStructured(
+        "Compress chat history into one durable summary for future turns. " +
+          "Keep: durable facts about the user, decisions made, promises and " +
+          "open threads, stable preferences. Drop: greetings, chit-chat, " +
+          "already-resolved items. Plain prose, no JSON, max 1500 characters. " +
+          "Never invent facts not in the input. Reply in Indonesian when the " +
+          "chat is Indonesian.",
+        input,
+        {},
+      )
+    ).text.trim();
+  } catch (err) {
+    log("warn", "compact: summarizer call failed", { err: String(err) });
+    return;
+  }
+  if (!next) {
+    log("warn", "compact: empty summary");
+    return;
+  }
+  const throughId = chunk[chunk.length - 1].id;
+  try {
+    await upsertConversationSummary(env.DB, convId, truncate(next, SUMMARY_MAX_CHARS), throughId);
+  } catch (err) {
+    log("warn", "compact: save failed", { err: String(err) });
+    return;
+  }
+  log("info", "compact: summary advanced", { through: throughId, chars: [...next].length });
 }

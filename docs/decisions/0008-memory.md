@@ -1,6 +1,6 @@
 # 0008 — Memory layers (profile first, $0 preserved)
 
-Status: M1 in build (2026-09-09)
+Status: M1 shipped + live, M3 shipped (awaiting pressure to fire)
 
 ## Problem
 
@@ -35,6 +35,14 @@ return. Transcript is fallback, not memory architecture (AGENTS.md).
 - M3 rolling summary (later): `conversation_summaries` at pressure
   threshold; transcript budget shrinks as summary grows; never
   summarize the summary.
+- M3 shipped 2026-09-09: migration 006 `conversation_summaries`
+  (conversation_id PK, summary, through_message_id watermark). Turn
+  injects summary block whole + verbatim window above watermark only.
+  Post-turn `compactIfNeeded` in waitUntil: SQL-first span check,
+  compacts oldest down to 30 kept once unsummarized rows pass 60,
+  input = prior summary + newly-aged chunk only. Summary cap 1500
+  chars. Verbatim rows kept (watermark narrows injection, deletes
+  nothing).
 - Metrics from day one: retrieval hit rate, injected tokens/turn,
   memory growth. Dashboard reads them when retargeted (0007 step 7).
 

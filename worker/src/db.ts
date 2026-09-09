@@ -49,6 +49,11 @@ export interface ProfileFact {
   value: string;
 }
 
+export interface ConversationSummary {
+  summary: string;
+  throughMessageId: number;
+}
+
 /** Atomically records update_id. True = first claim; false = duplicate, skip. */
 export async function claimUpdate(db: D1Database, updateId: number): Promise<boolean> {
   const res = await db
@@ -104,6 +109,84 @@ export async function recentMessages(
     .bind(conversationId, limit)
     .all<ChatMessage>();
   return res.results.slice().reverse();
+}
+
+/** Recent messages above a watermark id (rolling-summary window). */
+export async function recentMessagesAfter(
+  db: D1Database,
+  conversationId: number,
+  afterId: number,
+  limit: number,
+): Promise<Array<ChatMessage & { id: number }>> {
+  const res = await db
+    .prepare(
+      "SELECT id, role, text FROM messages WHERE conversation_id = ? AND id > ? ORDER BY id DESC LIMIT ?",
+    )
+    .bind(conversationId, afterId, limit)
+    .all<ChatMessage & { id: number }>();
+  return res.results.slice().reverse();
+}
+
+/** Count + id span of messages above the summary watermark. One cheap query. */
+export async function unsummarizedSpan(
+  db: D1Database,
+  conversationId: number,
+  afterId: number,
+): Promise<{ count: number; maxId: number }> {
+  const row = await db
+    .prepare(
+      "SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS mx FROM messages WHERE conversation_id = ? AND id > ?",
+    )
+    .bind(conversationId, afterId)
+    .first<{ n: number; mx: number }>();
+  return { count: row?.n ?? 0, maxId: row?.mx ?? 0 };
+}
+
+/** Oldest-first chunk above the watermark, the compaction input. */
+export async function messagesChunk(
+  db: D1Database,
+  conversationId: number,
+  afterId: number,
+  upToId: number,
+  limit: number,
+): Promise<Array<ChatMessage & { id: number }>> {
+  const res = await db
+    .prepare(
+      "SELECT id, role, text FROM messages WHERE conversation_id = ? AND id > ? AND id <= ? ORDER BY id ASC LIMIT ?",
+    )
+    .bind(conversationId, afterId, upToId, limit)
+    .all<ChatMessage & { id: number }>();
+  return res.results;
+}
+
+export async function getConversationSummary(
+  db: D1Database,
+  conversationId: number,
+): Promise<ConversationSummary> {
+  const row = await db
+    .prepare("SELECT summary, through_message_id AS throughId FROM conversation_summaries WHERE conversation_id = ?")
+    .bind(conversationId)
+    .first<{ summary: string; throughId: number }>();
+  return { summary: row?.summary ?? "", throughMessageId: row?.throughId ?? 0 };
+}
+
+export async function upsertConversationSummary(
+  db: D1Database,
+  conversationId: number,
+  summary: string,
+  throughMessageId: number,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO conversation_summaries(conversation_id, summary, through_message_id, updated_at)
+       VALUES (?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+       ON CONFLICT(conversation_id) DO UPDATE SET
+         summary = excluded.summary,
+         through_message_id = excluded.through_message_id,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(conversationId, summary, throughMessageId)
+    .run();
 }
 
 export async function recordTurnStat(db: D1Database, s: TurnStat): Promise<void> {
