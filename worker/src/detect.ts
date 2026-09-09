@@ -9,6 +9,7 @@ export const MAX_LOOP_TITLE_CHARS = 200;
 export const MAX_LOOP_CONTEXT_CHARS = 1000;
 /** Caps reminders at 30 days out. */
 export const MAX_REMINDER_MINUTES = 43200;
+export const MAX_PROFILE_VALUE_CHARS = 200;
 
 export interface LoopCandidate {
   title: string;
@@ -20,10 +21,16 @@ export interface ReminderCandidate {
   dueInMinutes: number;
 }
 
+export interface ProfileCandidate {
+  key: string;
+  value: string;
+}
+
 export interface Detection {
   loops: LoopCandidate[];
   closeIds: number[];
   reminders: ReminderCandidate[];
+  profile: ProfileCandidate[];
 }
 
 export function detectSystemPrompt(open: OpenLoop[]): string {
@@ -31,11 +38,16 @@ export function detectSystemPrompt(open: OpenLoop[]): string {
     "You track unfinished threads and reminder requests from a chat turn. " +
     "Reply with JSON ONLY, no other text, in exactly this shape:\n" +
     '{"loops":[{"title":"short thread name","context":"one-line detail"}],' +
-    '"close_ids":[1],"reminders":[{"text":"what to remind","due_in_minutes":120}]}\n' +
+    '"close_ids":[1],"reminders":[{"text":"what to remind","due_in_minutes":120}],' +
+    '"profile":[{"key":"language","value":"Indonesian"}]}\n' +
     "Rules: loops = concrete unfinished items (promises, plans, questions awaiting action), " +
     "never chit-chat or already-answered items. close_ids = IDs below clearly resolved this turn. " +
     'reminders = ONLY explicit requests to be reminded ("remind me", "ingatkan", "kasih tau nanti"). ' +
-    "due_in_minutes is relative to now. Empty lists when nothing qualifies.";
+    "due_in_minutes is relative to now. " +
+    "profile = durable facts about the user stated or clearly shown this turn: " +
+    'their name ("namaku X" -> key=name), the language they write in (key=language, e.g. Indonesian, English), ' +
+    "stable preferences (key=pref.<topic>, e.g. pref.coffee). Never guess; empty when nothing stated. " +
+    "Empty lists when nothing qualifies.";
   if (open.length > 0) {
     prompt += "\nOpen loops:";
     for (const l of open) prompt += `\n- id=${l.id} title=${JSON.stringify(l.title)}`;
@@ -59,10 +71,12 @@ export function parseDetection(raw: string, open: OpenLoop[]): Detection {
   if (!Array.isArray(det.loops)) det.loops = [];
   if (!Array.isArray(det.closeIds)) det.closeIds = [];
   if (!Array.isArray(det.reminders)) det.reminders = [];
+  if (!Array.isArray(det.profile)) det.profile = [];
   if (
     det.loops.length > MAX_DETECT_ITEMS ||
     det.reminders.length > MAX_DETECT_ITEMS ||
-    det.closeIds.length > MAX_DETECT_ITEMS
+    det.closeIds.length > MAX_DETECT_ITEMS ||
+    det.profile.length > MAX_DETECT_ITEMS
   ) {
     throw new Error(`list exceeds cap of ${MAX_DETECT_ITEMS}`);
   }
@@ -86,6 +100,15 @@ export function parseDetection(raw: string, open: OpenLoop[]): Detection {
       throw new Error(`reminder ${i}: due_in_minutes out of range`);
     }
     det.reminders[i] = { text, dueInMinutes: due };
+  }
+  const keyRe = /^(name|language|pref\.[a-z0-9_]{1,32})$/;
+  for (let i = 0; i < det.profile.length; i++) {
+    const key = (det.profile[i].key ?? "").trim();
+    const value = (det.profile[i].value ?? "").trim();
+    if (!keyRe.test(key)) throw new Error(`profile ${i}: bad key ${JSON.stringify(key)}`);
+    if (!value) throw new Error(`profile ${i}: empty value`);
+    if ([...value].length > MAX_PROFILE_VALUE_CHARS) throw new Error(`profile ${i}: value too long`);
+    det.profile[i] = { key, value };
   }
   return det;
 }

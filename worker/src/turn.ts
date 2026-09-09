@@ -15,11 +15,13 @@ import {
   closeLoop,
   createReminder,
   getOrCreateConversation,
+  getProfileFacts,
   markUpdateProcessed,
   openLoopOrExisting,
   openLoops,
   recentMessages,
   recordTurnStat,
+  upsertProfileFact,
 } from "./db";
 import { detectSystemPrompt as buildDetectPrompt, parseDetection as parse } from "./detect";
 
@@ -144,6 +146,19 @@ export async function handleUpdate(
     log("error", "load history failed", { err: String(err) });
     return;
   }
+  // Profile facts are tiny and deterministic: loaded whole, injected whole.
+  let profileBlock = "";
+  try {
+    const facts = await getProfileFacts(env.DB, chatId);
+    if (facts.length > 0) {
+      profileBlock =
+        "You remember about this user: " +
+        facts.map((f) => `${f.key}=${f.value}`).join("; ") +
+        ". Honor the language fact: reply in their language.";
+    }
+  } catch (err) {
+    log("warn", "load profile failed", { err: String(err) });
+  }
 
   const started = Date.now();
   sender.sendTyping(chatId).catch((err) => log("warn", "typing indicator failed", { err: String(err) }));
@@ -152,7 +167,7 @@ export async function handleUpdate(
   }, TYPING_INTERVAL_MS);
   let reply: string;
   try {
-    reply = await llm.generate(history);
+    reply = await llm.generate(history, profileBlock);
   } catch (err) {
     clearInterval(typer);
     const latencyMs = Date.now() - started;
@@ -257,7 +272,13 @@ async function detectAndApply(
       log("warn", "detect: create reminder failed", { err: String(err) }),
     );
   }
+  for (const p of det.profile) {
+    await upsertProfileFact(env.DB, chatId, p.key, p.value).catch((err) =>
+      log("warn", "detect: save profile fact failed", { key: p.key, err: String(err) }),
+    );
+  }
   log("info", "detect: applied", {
     loops: det.loops.length, closed: det.closeIds.length, reminders: det.reminders.length,
+    profile: det.profile.length,
   });
 }

@@ -43,6 +43,12 @@ export interface OutboxMessage {
   text: string;
 }
 
+export interface ProfileFact {
+  chatId: number;
+  key: string;
+  value: string;
+}
+
 /** Atomically records update_id. True = first claim; false = duplicate, skip. */
 export async function claimUpdate(db: D1Database, updateId: number): Promise<boolean> {
   const res = await db
@@ -297,4 +303,31 @@ export async function countOutboxSentSince(
     .bind(chatId, since)
     .first<{ n: number }>();
   return row?.n ?? 0;
+}
+
+/** Durable per-chat user facts (name, language, prefs). Whole set is tiny; loaded every turn. */
+export async function getProfileFacts(db: D1Database, chatId: number): Promise<ProfileFact[]> {
+  const res = await db
+    .prepare("SELECT chat_id AS chatId, key, value FROM profile_facts WHERE chat_id = ? ORDER BY key")
+    .bind(chatId)
+    .all<ProfileFact>();
+  return res.results;
+}
+
+/** Upserts one fact; latest statement wins. Key/value shapes validated by callers. */
+export async function upsertProfileFact(
+  db: D1Database,
+  chatId: number,
+  key: string,
+  value: string,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO profile_facts(chat_id, key, value, updated_at)
+       VALUES (?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+       ON CONFLICT (chat_id, key) DO UPDATE SET
+         value = excluded.value, updated_at = excluded.updated_at`,
+    )
+    .bind(chatId, key, value)
+    .run();
 }
