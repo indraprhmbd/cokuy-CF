@@ -69,7 +69,10 @@ export function parseDetection(raw: string, open: OpenLoop[]): Detection {
     throw new Error(`unmarshal: ${err instanceof Error ? err.message : String(err)}`);
   }
   if (!Array.isArray(det.loops)) det.loops = [];
-  if (!Array.isArray(det.closeIds)) det.closeIds = [];
+  // Be liberal in keys: accept snake_case the prompt previously taught.
+  const rawClose = (det as { closeIds?: unknown; close_ids?: unknown }).closeIds ??
+    (det as { close_ids?: unknown }).close_ids;
+  det.closeIds = Array.isArray(rawClose) ? rawClose as number[] : [];
   if (!Array.isArray(det.reminders)) det.reminders = [];
   if (!Array.isArray(det.profile)) det.profile = [];
   if (
@@ -94,12 +97,15 @@ export function parseDetection(raw: string, open: OpenLoop[]): Detection {
   }
   for (let i = 0; i < det.reminders.length; i++) {
     const text = (det.reminders[i].text ?? "").trim();
-    const due = det.reminders[i].dueInMinutes;
+    // Coerce numeric strings ("5" -> 5); model often quotes numbers.
+    const rawDue = (det.reminders[i] as { dueInMinutes?: unknown; due_in_minutes?: unknown }).dueInMinutes ??
+      (det.reminders[i] as { due_in_minutes?: unknown }).due_in_minutes;
+    const due = typeof rawDue === "string" && rawDue.trim() !== "" ? Number(rawDue) : rawDue;
     if (!text) throw new Error(`reminder ${i}: empty text`);
-    if (!Number.isInteger(due) || due < 1 || due > MAX_REMINDER_MINUTES) {
+    if (!Number.isInteger(due) || (due as number) < 1 || (due as number) > MAX_REMINDER_MINUTES) {
       throw new Error(`reminder ${i}: dueInMinutes out of range`);
     }
-    det.reminders[i] = { text, dueInMinutes: due };
+    det.reminders[i] = { text, dueInMinutes: due as number };
   }
   const keyRe = /^(name|language|pref\.[a-z0-9_]{1,32})$/;
   for (let i = 0; i < det.profile.length; i++) {
