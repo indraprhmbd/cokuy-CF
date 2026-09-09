@@ -9,7 +9,9 @@
     "LLM_MODEL": "MiniMax-M2.7-highspeed"
   },
   // Tick port: flush reminders, draft nudges, drain outbox (quiet-hours + cap gates).
-  "triggers": { "crons": ["*/15 * * * *"] },
+  // Every minute: idle ticks are ~10 indexed D1 reads (~15k/day vs 5M quota),
+  // and 1-min granularity keeps reminder lateness under ~1 min without DO alarms.
+  "triggers": { "crons": ["* * * * *"] },
   // Remote D1 created 2026-09-09 (APAC). Binding stays DB (code uses env.DB).
   "d1_databases": [
     {
