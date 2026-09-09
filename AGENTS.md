@@ -31,6 +31,13 @@ Build Cokuy as a persistent personal agent, not a generic chatbot.
 Classify important changes as: decision, hypothesis, experiment, or open loop.
 Record meaningful architectural changes under `docs/decisions/`.
 
+## Context files
+
+Coding-agent context lives under `docs/context/`. Read before changing
+behavior: `PRODUCT.md` (what Cokuy is), `PERSISTENCE.md` (state rules),
+`ARCHITECTURE.md`, `SOUL.md`, `MEMORY.md`, `DEVELOPMENT.md`,
+`SECURITY.md` (archived v0.1 snapshot, principles still apply).
+
 ## Living context rule
 
 Always keep the initial plan aligned with current best-practice implementation. Before making consequential technical decisions, use relevant installed skills, MCP/connectors, or current external sources when they materially improve correctness. Update the corresponding context/decision file after learning something that changes the plan.
