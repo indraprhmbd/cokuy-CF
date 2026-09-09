@@ -50,7 +50,13 @@ Sumopod / OpenRouter / Ollama / vLLM.
    duplicate reminder insert is a no-op.
 - Live: watch `detect: applied` counts + reminder save rate in logs.
 
-## Exit / revisit
+## Amendment 2026-09-09: reminder due clock
+
+Live test showed `due_at` stamped +7h out. Cause was ours, not the model:
+`detectAndApply` based `due` on the WIB-shifted wall clock instead of real
+UTC. Fixed (commit 6b75081): `due = Date.now() + dueInMinutes`, minute
+truncated for the migration-005 idempotency key. Earlier "model added 7h"
+theory was wrong; the offset was added by our own code.
 
 If retry rate stays high after probe confirms passthrough works, revisit
 the deferred hybrid detector. If tool side effects exceed ~3 actions,
