@@ -203,12 +203,18 @@ export async function createReminder(
   text: string,
   dueAt: Date,
 ): Promise<number> {
-  const res = await db
-    .prepare("INSERT INTO reminders(chat_id, text, due_at) VALUES (?,?,?)")
+  // Idempotent per migration 005: redelivery with the same minute-truncated
+  // due_at is a no-op returning the existing row.
+  await db
+    .prepare("INSERT OR IGNORE INTO reminders(chat_id, text, due_at) VALUES (?,?,?)")
     .bind(chatId, text, dueAt.toISOString())
     .run();
-  if (res.meta.last_row_id == null) throw new Error("create reminder: missing row id");
-  return res.meta.last_row_id;
+  const row = await db
+    .prepare("SELECT id FROM reminders WHERE chat_id = ? AND text = ? AND due_at = ?")
+    .bind(chatId, text, dueAt.toISOString())
+    .first<{ id: number }>();
+  if (row == null) throw new Error("create reminder: missing row id");
+  return row.id;
 }
 
 export async function dueReminders(db: D1Database, now: Date, limit: number): Promise<Reminder[]> {

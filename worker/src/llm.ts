@@ -16,8 +16,21 @@ export interface LlmUsage {
 }
 
 interface ChatCompletionsResponse {
-  choices?: Array<{ message?: { content?: string } }>;
+  choices?: Array<{
+    message?: { content?: string; tool_calls?: Array<{ function?: { arguments?: string } }> };
+    finish_reason?: string;
+  }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+}
+
+/** Opportunistic extras. Gateways/models may silently drop any of these;
+ * callers must treat text as the primary channel and validate everything. */
+export interface CompleteOptions {
+  temperature?: number;
+  maxTokens?: number;
+  /** e.g. { type: "json_object" } or a json_schema shape. */
+  responseFormat?: Record<string, unknown>;
+  tools?: Array<Record<string, unknown>>;
 }
 
 const WIB_OFFSET_MS = 7 * 3600 * 1000;
@@ -77,16 +90,26 @@ export class OpenAICompatible {
   }
 
   /** Machine-consumed call with caller-supplied system prompt. Trusts nothing; callers validate. */
-  async generateStructured(sysPrompt: string, userPrompt: string): Promise<string> {
-    const { text } = await this.complete([
-      { role: "system", text: sysPrompt },
-      { role: "user", text: userPrompt },
-    ]);
-    if (!text) throw new Error("llm structured: empty reply");
-    return text;
+  async generateStructured(
+    sysPrompt: string,
+    userPrompt: string,
+    opts: CompleteOptions = {},
+  ): Promise<{ text: string; toolArgs: string | null }> {
+    const { text, toolArgs } = await this.complete(
+      [
+        { role: "system", text: sysPrompt },
+        { role: "user", text: userPrompt },
+      ],
+      opts,
+    );
+    if (!text && !toolArgs) throw new Error("llm structured: empty reply");
+    return { text, toolArgs };
   }
 
-  private async complete(messages: LlmMessage[]): Promise<{ text: string; usage: LlmUsage }> {
+  private async complete(
+    messages: LlmMessage[],
+    opts: CompleteOptions = {},
+  ): Promise<{ text: string; usage: LlmUsage; toolArgs: string | null }> {
     const url = `${this.baseURL.replace(/\/+$/, "")}/chat/completions`;
     const started = Date.now();
     const deadline = started + Math.max(1, this.timeoutSecs) * 1000;
@@ -103,9 +126,14 @@ export class OpenAICompatible {
             ...this.extraHeaders,
           },
           // Wire format needs `content`; LlmMessage carries `text` internally.
+          // Extras are opportunistic: MiniMax/Sumopod may silently drop them.
           body: JSON.stringify({
             model: this.model,
             messages: messages.map((m) => ({ role: m.role, content: m.text })),
+            ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
+            ...(opts.maxTokens !== undefined ? { max_tokens: opts.maxTokens } : {}),
+            ...(opts.responseFormat !== undefined ? { response_format: opts.responseFormat } : {}),
+            ...(opts.tools !== undefined ? { tools: opts.tools, tool_choice: "auto" } : {}),
           }),
           signal: AbortSignal.timeout(20000),
         });
@@ -120,6 +148,7 @@ export class OpenAICompatible {
         }
         return {
           text: (body.choices[0].message?.content ?? "").trim(),
+          toolArgs: body.choices[0].message?.tool_calls?.[0]?.function?.arguments ?? null,
           usage: {
             prompt: body.usage?.prompt_tokens ?? 0,
             completion: body.usage?.completion_tokens ?? 0,

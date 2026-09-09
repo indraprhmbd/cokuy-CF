@@ -114,7 +114,7 @@ async function enqueueNudges(env: Env, llm: OpenAICompatible, now: Date): Promis
             "One or two sentences, no greeting fluff, no JSON, just the message text.",
           `Unfinished thread: ${l.title}\nDetail: ${l.context}`,
         )
-      ).trim();
+      ).text.trim();
     } catch (err) {
       log("warn", "tick: nudge draft failed", { loop_id: l.id, err: String(err) });
       continue;

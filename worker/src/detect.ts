@@ -57,64 +57,158 @@ export function detectSystemPrompt(open: OpenLoop[]): string {
   return prompt;
 }
 
-/** Extracts the JSON object from raw output and validates every field. Wholesale reject on any flaw. */
-export function parseDetection(raw: string, open: OpenLoop[]): Detection {
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
+/** Single function tool carrying the whole detector schema. Sent
+ * opportunistically: gateways/models that drop `tools` fall back to the
+ * prompt + brace path below, unchanged. */
+export const RECORD_STATE_TOOL = {
+  type: "function",
+  function: {
+    name: "record_state",
+    description: "Record unfinished threads, resolved loop IDs, reminder requests, and durable user facts from this turn.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["loops", "closeIds", "reminders", "profile"],
+      properties: {
+        loops: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["title", "context"],
+            properties: { title: { type: "string" }, context: { type: "string" } },
+          },
+        },
+        closeIds: { type: "array", items: { type: "integer" } },
+        reminders: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["text", "dueInMinutes"],
+            properties: { text: { type: "string" }, dueInMinutes: { type: "integer" } },
+          },
+        },
+        profile: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["key", "value"],
+            properties: { key: { type: "string" }, value: { type: "string" } },
+          },
+        },
+      },
+    },
+  },
+} as const;
+
+/** MiniMax-native XML tool syntax: <minimax:tool_call><invoke
+ * name="record_state"><parameter name="loops">[...]</parameter> ... */
+function parseMinimaxXml(raw: string): unknown | null {
+  const call = raw.match(/<minimax:tool_call>([\s\S]*?)<\/minimax:tool_call>/);
+  if (!call) return null;
+  const invoke = call[1].match(/<invoke\s+name="record_state">([\s\S]*?)<\/invoke>/);
+  if (!invoke) return null;
+  const out: Record<string, unknown> = {};
+  for (const m of invoke[1].matchAll(/<parameter\s+name="([a-zA-Z]+)">([\s\S]*?)<\/parameter>/g)) {
+    try {
+      out[m[1]] = JSON.parse(m[2].trim());
+    } catch {
+      return null;
+    }
+  }
+  return out;
+}
+
+/** Think-strip + triple-path payload: OpenAI tool args, MiniMax XML, brace-scrape. */
+function extractPayload(raw: string, toolArgs: string | null): unknown {
+  const stripped = raw.replace(/<think>[\s\S]*?(<\/think>|$)/g, "").trim();
+  if (toolArgs?.trim()) {
+    try {
+      return JSON.parse(toolArgs);
+    } catch {
+      // fall through to text paths
+    }
+  }
+  const xml = parseMinimaxXml(stripped);
+  if (xml) return xml;
+  const start = stripped.indexOf("{");
+  const end = stripped.lastIndexOf("}");
   if (start < 0 || end <= start) throw new Error("no JSON object found");
-  let det: Detection;
   try {
-    det = JSON.parse(raw.slice(start, end + 1)) as Detection;
+    return JSON.parse(stripped.slice(start, end + 1));
   } catch (err) {
     throw new Error(`unmarshal: ${err instanceof Error ? err.message : String(err)}`);
   }
-  if (!Array.isArray(det.loops)) det.loops = [];
-  // Be liberal in keys: accept snake_case the prompt previously taught.
-  const rawClose = (det as { closeIds?: unknown; close_ids?: unknown }).closeIds ??
-    (det as { close_ids?: unknown }).close_ids;
-  det.closeIds = Array.isArray(rawClose) ? rawClose as number[] : [];
-  if (!Array.isArray(det.reminders)) det.reminders = [];
-  if (!Array.isArray(det.profile)) det.profile = [];
-  if (
-    det.loops.length > MAX_DETECT_ITEMS ||
-    det.reminders.length > MAX_DETECT_ITEMS ||
-    det.closeIds.length > MAX_DETECT_ITEMS ||
-    det.profile.length > MAX_DETECT_ITEMS
-  ) {
-    throw new Error(`list exceeds cap of ${MAX_DETECT_ITEMS}`);
-  }
-  for (let i = 0; i < det.loops.length; i++) {
-    const title = (det.loops[i].title ?? "").trim();
-    const context = (det.loops[i].context ?? "").trim();
-    if (!title) throw new Error(`loop ${i}: empty title`);
-    if ([...title].length > MAX_LOOP_TITLE_CHARS) throw new Error(`loop ${i}: title too long`);
-    if ([...context].length > MAX_LOOP_CONTEXT_CHARS) throw new Error(`loop ${i}: context too long`);
-    det.loops[i] = { title, context };
+}
+
+export interface PartialResult {
+  det: Detection;
+  /** Per-list counts of items dropped (not clamped) by validation. */
+  dropped: { loops: number; closeIds: number; reminders: number; profile: number };
+}
+
+function asArray(v: unknown): unknown[] {
+  return Array.isArray(v) ? v : [];
+}
+
+function clampRunes(s: string, max: number): string {
+  const r = [...s];
+  return r.length <= max ? s : r.slice(0, max).join("");
+}
+
+/**
+ * Partial-accept validation: bad items are dropped (counts in `dropped`),
+ * overlong strings clamped, unknown close_ids ignored. Only throws when no
+ * JSON payload exists at all — callers retry once on throw.
+ */
+export function parseDetection(raw: string, open: OpenLoop[], toolArgs: string | null = null): PartialResult {
+  const det = extractPayload(raw, toolArgs) as Record<string, unknown>;
+  const dropped = { loops: 0, closeIds: 0, reminders: 0, profile: 0 };
+  const loops: LoopCandidate[] = [];
+  for (const item of asArray(det.loops).slice(0, MAX_DETECT_ITEMS)) {
+    const o = (item ?? {}) as Record<string, unknown>;
+    const title = String(o.title ?? "").trim();
+    const context = String(o.context ?? "").trim();
+    if (!title) {
+      dropped.loops++;
+      continue;
+    }
+    loops.push({ title: clampRunes(title, MAX_LOOP_TITLE_CHARS), context: clampRunes(context, MAX_LOOP_CONTEXT_CHARS) });
   }
   const known = new Set(open.map((l) => l.id));
-  for (const id of det.closeIds) {
-    if (!known.has(id)) throw new Error(`close_id ${id} not open`);
+  // Be liberal in keys: accept snake_case the prompt previously taught.
+  const rawClose = (det.closeIds ?? det.close_ids) as unknown;
+  const closeIds: number[] = [];
+  for (const id of asArray(rawClose).slice(0, MAX_DETECT_ITEMS)) {
+    if (typeof id === "number" && Number.isInteger(id) && known.has(id)) closeIds.push(id);
+    else dropped.closeIds++;
   }
-  for (let i = 0; i < det.reminders.length; i++) {
-    const text = (det.reminders[i].text ?? "").trim();
+  const reminders: ReminderCandidate[] = [];
+  for (const item of asArray(det.reminders).slice(0, MAX_DETECT_ITEMS)) {
+    const o = (item ?? {}) as Record<string, unknown>;
+    const text = String(o.text ?? "").trim();
     // Coerce numeric strings ("5" -> 5); model often quotes numbers.
-    const rawDue = (det.reminders[i] as { dueInMinutes?: unknown; due_in_minutes?: unknown }).dueInMinutes ??
-      (det.reminders[i] as { due_in_minutes?: unknown }).due_in_minutes;
+    const rawDue = (o.dueInMinutes ?? o.due_in_minutes) as unknown;
     const due = typeof rawDue === "string" && rawDue.trim() !== "" ? Number(rawDue) : rawDue;
-    if (!text) throw new Error(`reminder ${i}: empty text`);
-    if (!Number.isInteger(due) || (due as number) < 1 || (due as number) > MAX_REMINDER_MINUTES) {
-      throw new Error(`reminder ${i}: dueInMinutes out of range`);
+    if (!text || !Number.isInteger(due) || (due as number) < 1 || (due as number) > MAX_REMINDER_MINUTES) {
+      dropped.reminders++;
+      continue;
     }
-    det.reminders[i] = { text, dueInMinutes: due as number };
+    reminders.push({ text, dueInMinutes: due as number });
   }
   const keyRe = /^(name|language|pref\.[a-z0-9_]{1,32})$/;
-  for (let i = 0; i < det.profile.length; i++) {
-    const key = (det.profile[i].key ?? "").trim();
-    const value = (det.profile[i].value ?? "").trim();
-    if (!keyRe.test(key)) throw new Error(`profile ${i}: bad key ${JSON.stringify(key)}`);
-    if (!value) throw new Error(`profile ${i}: empty value`);
-    if ([...value].length > MAX_PROFILE_VALUE_CHARS) throw new Error(`profile ${i}: value too long`);
-    det.profile[i] = { key, value };
+  const profile: ProfileCandidate[] = [];
+  for (const item of asArray(det.profile).slice(0, MAX_DETECT_ITEMS)) {
+    const o = (item ?? {}) as Record<string, unknown>;
+    const key = String(o.key ?? "").trim();
+    const value = String(o.value ?? "").trim();
+    if (!keyRe.test(key) || !value) {
+      dropped.profile++;
+      continue;
+    }
+    profile.push({ key, value: clampRunes(value, MAX_PROFILE_VALUE_CHARS) });
   }
-  return det;
+  return { det: { loops, closeIds, reminders, profile }, dropped };
 }

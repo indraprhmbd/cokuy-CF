@@ -23,7 +23,7 @@ import {
   recordTurnStat,
   upsertProfileFact,
 } from "./db";
-import { detectSystemPrompt as buildDetectPrompt, parseDetection as parse } from "./detect";
+import { detectSystemPrompt as buildDetectPrompt, parseDetection, RECORD_STATE_TOOL } from "./detect";
 import { sanitizeReply } from "./sanitize";
 
 const HISTORY_FETCH_LIMIT = 40;
@@ -35,6 +35,11 @@ const MAX_REPLY_CHARS = 4000;
 const TYPING_INTERVAL_MS = 4000;
 
 const WIB_OFFSET_MS = 7 * 3600 * 1000;
+
+/** Router pre-gate for the detector: explicit reminder verbs, durable-fact
+ * phrases, or task words force a run. Chit-chat without open loops skips it. */
+const DETECT_TRIGGER_RE =
+  /inget|ingatkan|remind|kasih tau|jangan lupa|namaku|nama (saya|gue|aku)|suka |sukanya|prefer|bahasanya|todo|tugas|janji|deadline|utang/i;
 
 function truncate(s: string, max: number): string {
   const runes = [...s];
@@ -244,23 +249,44 @@ async function detectAndApply(
     log("warn", "detect: load open loops failed", { err: String(err) });
     return;
   }
+  // Router pre-gate: chit-chat with no open loops skips the detector call.
+  // Heuristic, documented: trigger verbs/fact phrases force a run.
+  if (open.length === 0 && !DETECT_TRIGGER_RE.test(`${userText}\n${assistantReply}`)) {
+    log("info", "detect: skipped by router");
+    return;
+  }
+  const sys = buildDetectPrompt(open);
+  const user = `USER:\n${userText}\nASSISTANT:\n${assistantReply}`;
   let raw: string;
+  let toolArgs: string | null;
   try {
-    raw = await llm.generateStructured(
-      buildDetectPrompt(open),
-      `USER:\n${userText}\nASSISTANT:\n${assistantReply}`,
-    );
+    ({ text: raw, toolArgs } = await llm.generateStructured(sys, user, {
+      responseFormat: { type: "json_object" },
+      tools: [RECORD_STATE_TOOL as unknown as Record<string, unknown>],
+    }));
   } catch (err) {
     log("warn", "detect: extraction call failed", { err: String(err) });
     return;
   }
-  let det;
+  let parsed;
   try {
-    det = parse(raw, open);
+    parsed = parseDetection(raw, open, toolArgs);
   } catch (err) {
-    log("warn", "detect: invalid extraction output", { err: String(err) });
-    return;
+    // Budget-1 retry: re-prompt with the compact validator error.
+    log("info", "detect: retrying after parse failure", { err: String(err) });
+    try {
+      ({ text: raw, toolArgs } = await llm.generateStructured(
+        `${sys}\nYour last output failed validation: ${String(err).slice(0, 200)}. Reply with corrected JSON only.`,
+        user,
+        { temperature: 0.2, maxTokens: 500 },
+      ));
+      parsed = parseDetection(raw, open, toolArgs);
+    } catch (err2) {
+      log("warn", "detect: invalid extraction output", { err: String(err2) });
+      return;
+    }
   }
+  const det = parsed.det;
   const now = new Date(Date.now() + WIB_OFFSET_MS);
   for (const id of det.closeIds) {
     await closeLoop(env.DB, id, chatId).catch((err) =>
@@ -273,7 +299,10 @@ async function detectAndApply(
     );
   }
   for (const r of det.reminders) {
+    // Truncate due to the minute: redelivery recomputes the same key, so
+    // INSERT OR IGNORE dedupes the retry (migration 005).
     const due = new Date(now.getTime() + r.dueInMinutes * 60000);
+    due.setSeconds(0, 0);
     await createReminder(env.DB, chatId, r.text, due).catch((err) =>
       log("warn", "detect: create reminder failed", { err: String(err) }),
     );
@@ -285,6 +314,6 @@ async function detectAndApply(
   }
   log("info", "detect: applied", {
     loops: det.loops.length, closed: det.closeIds.length, reminders: det.reminders.length,
-    profile: det.profile.length,
+    profile: det.profile.length, dropped: parsed.dropped,
   });
 }
