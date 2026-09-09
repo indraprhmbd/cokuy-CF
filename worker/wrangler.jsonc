@@ -3,6 +3,11 @@
   "name": "cokuy-cf",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-08",
+  "vars": {
+    "ALLOWED_USER_IDS": "000000000",
+    "LLM_BASE_URL": "https://ai.sumopod.com/v1",
+    "LLM_MODEL": "MiniMax-M2.7-highspeed"
+  },
   // Tick port: flush reminders, draft nudges, drain outbox (quiet-hours + cap gates).
   "triggers": { "crons": ["*/15 * * * *"] },
   // Remote D1 created 2026-09-09 (APAC). Binding stays DB (code uses env.DB).
