@@ -1,6 +1,6 @@
 # 0011 - Robust detector: partial-accept, retry, opportunistic tools
 
-Status: accepted, implementing
+Status: accepted, shipped, verified end to end
 Date: 2026-09-09
 
 ## Problem
@@ -61,3 +61,16 @@ theory was wrong; the offset was added by our own code.
 If retry rate stays high after probe confirms passthrough works, revisit
 the deferred hybrid detector. If tool side effects exceed ~3 actions,
 revisit approval-gated patterns (never silently).
+
+## Amendment 2026-09-09: cron per-minute + live verification
+
+Cron tightened `*/15` -> `* * * * *` (commit 6bbb402). Cost: ~1.4% of
+Workers req quota, ~0.3% of D1 reads. External cron rejected (extra
+infra, auth surface, webhooks bypass $0).
+
+Live end-to-end proof, same day: model returned OpenAI-shape `tool_calls`
+first try (Sumopod forwards `tools` fine, MiniMax honored it). Two test
+reminders missed the :15 tick by ~60s, then sat through the cron
+propagation gap with zero ticks firing. Once per-minute cron went live
+(~11:37 WIB), both pings arrived, one outbox row each, no duplicates.
+Pipeline detector -> persist -> tick -> outbox -> deliver confirmed.
