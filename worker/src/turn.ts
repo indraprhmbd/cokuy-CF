@@ -24,6 +24,7 @@ import {
   upsertProfileFact,
 } from "./db";
 import { detectSystemPrompt as buildDetectPrompt, parseDetection as parse } from "./detect";
+import { sanitizeReply } from "./sanitize";
 
 const HISTORY_FETCH_LIMIT = 40;
 const HISTORY_BUDGET_CHARS = 10000;
@@ -189,6 +190,11 @@ export async function handleUpdate(
   });
 
   reply = truncate(reply.trim(), MAX_REPLY_CHARS);
+  // Model sometimes emits mojibake / non-Latin leaks: scrub before persist
+  // and send so stored history and Telegram never carry visible garbage.
+  const clean = sanitizeReply(reply);
+  if (clean.stripped > 0) log("warn", "reply sanitized", { stripped: clean.stripped });
+  reply = clean.text.trim();
   if (!reply) {
     log("error", "empty model reply");
     await recordTurnStat(env.DB, {
