@@ -38,12 +38,12 @@ export function detectSystemPrompt(open: OpenLoop[]): string {
     "You track unfinished threads and reminder requests from a chat turn. " +
     "Reply with JSON ONLY, no other text, in exactly this shape:\n" +
     '{"loops":[{"title":"short thread name","context":"one-line detail"}],' +
-    '"close_ids":[1],"reminders":[{"text":"what to remind","due_in_minutes":120}],' +
+    '"closeIds":[1],"reminders":[{"text":"what to remind","dueInMinutes":120}],' +
     '"profile":[{"key":"language","value":"Indonesian"}]}\n' +
     "Rules: loops = concrete unfinished items (promises, plans, questions awaiting action), " +
-    "never chit-chat or already-answered items. close_ids = IDs below clearly resolved this turn. " +
-    'reminders = ONLY explicit requests to be reminded ("remind me", "ingatkan", "kasih tau nanti"). ' +
-    "due_in_minutes is relative to now. " +
+    "never chit-chat or already-answered items. closeIds = IDs below clearly resolved this turn. " +
+    'reminders = ONLY explicit requests to be reminded ("remind me", "ingatkan", "ingetin", "kasih tau nanti"). ' +
+    "dueInMinutes is relative to now. " +
     "profile = durable facts about the user stated or clearly shown this turn: " +
     'their name ("namaku X" -> key=name), the language they write in (key=language, e.g. Indonesian, English), ' +
     "stable preferences (key=pref.<topic>, e.g. pref.coffee). Never guess; empty when nothing stated. " +
@@ -97,7 +97,7 @@ export function parseDetection(raw: string, open: OpenLoop[]): Detection {
     const due = det.reminders[i].dueInMinutes;
     if (!text) throw new Error(`reminder ${i}: empty text`);
     if (!Number.isInteger(due) || due < 1 || due > MAX_REMINDER_MINUTES) {
-      throw new Error(`reminder ${i}: due_in_minutes out of range`);
+      throw new Error(`reminder ${i}: dueInMinutes out of range`);
     }
     det.reminders[i] = { text, dueInMinutes: due };
   }

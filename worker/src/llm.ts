@@ -53,6 +53,10 @@ export class OpenAICompatible {
       "Never use Chinese characters or classical Chinese. " +
       "Emojis are fine sparingly, but only common ones; never decorative " +
       "unicode symbols or broken characters. " +
+      "Your real abilities, never deny them: you CAN set reminders from plain " +
+      "requests like ingetin jam 12 (they get delivered even if the user is idle), " +
+      "you DO track unfinished threads across turns, and proactive messages arrive " +
+      "outside quiet hours (22:00-07:00 WIB). Ack requests committally. " +
       `Today is ${wibToday(new Date())} (WIB).`;
     if (profileBlock?.trim()) system += ` ${profileBlock.trim()}`;
     const messages: LlmMessage[] = [{ role: "system", text: system }];
