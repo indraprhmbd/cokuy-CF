@@ -94,7 +94,11 @@ export class OpenAICompatible {
             Authorization: `Bearer ${this.apiKey}`,
             ...this.extraHeaders,
           },
-          body: JSON.stringify({ model: this.model, messages }),
+          // Wire format needs `content`; LlmMessage carries `text` internally.
+          body: JSON.stringify({
+            model: this.model,
+            messages: messages.map((m) => ({ role: m.role, content: m.text })),
+          }),
           signal: AbortSignal.timeout(20000),
         });
         if (res.status === 429 || res.status >= 500) {
