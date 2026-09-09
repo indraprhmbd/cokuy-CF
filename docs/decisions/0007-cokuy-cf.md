@@ -100,9 +100,12 @@ Dashboard (SvelteKit, adapter-cloudflare) -> Workers Static Assets,
    non-message claimed+closed) + manual cron trigger (due reminder
    flushed to outbox, failed send released the claim, reminder stayed
    unsent). Smoke rows wiped from local D1 after.
-6. Cutover: `setWebhook?url=...&secret_token=...`. Rollback:
-   `deleteWebhook` + `go run ./cmd/cokuy` — VPS binary untouched until
-   CF proven (keep 1–2 weeks).
+6. Cutover: DONE 2026-09-09. `wrangler deploy` → `cokuy-cf` live on
+   workers.dev (APAC/SIN) + cron `*/15`. GO bot stopped, `setWebhook`
+   to `/telegram` returned ok:true, bot replies via CF. D1 confirms:
+   messages 22→26, turns 5→7, updates 11→13 (2 pending flushed + live
+   test turn). Rollback: `deleteWebhook` + `go run ./cmd/cokuy` — VPS
+   binary untouched until CF proven (keep 1–2 weeks).
 7. Dashboard retarget + deploy. Delete Go metrics endpoint only after.
 
 ## Exit paths
