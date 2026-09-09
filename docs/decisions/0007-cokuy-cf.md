@@ -120,8 +120,15 @@ Dashboard (SvelteKit, adapter-cloudflare) -> Workers Static Assets,
    API in bot worker?
 2. Keep `dashboard/` in same repo (`cokuy-cf/` monorepo) or separate
    repo for deploys?
-3. `workers.dev` subdomain vs custom domain (custom needed only for
-   branding; webhooks work on workers.dev)?
+3. `workers.dev` subdomain vs custom domain: RESOLVED — ship on
+   workers.dev first ($0, zero setup), add custom domain later once
+   the bot is trusted. Telegram delivers to workers.dev with no
+   functional difference. Custom domain (~$10/yr, only non-$0 item)
+   buys portability (repoint DNS on host exit, no setWebhook dance),
+   one home for bot + dashboard subdomains, and fewer corporate
+   filter false positives. Non-breaking change: point domain at
+   Cloudflare, add Worker custom domain/route, setWebhook to new URL,
+   delete old route.
 4. Port briefing + context layers (E/F) straight into CF build, or
    ship CF parity first (A–D) then add?
 
