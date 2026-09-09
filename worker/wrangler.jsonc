@@ -20,5 +20,15 @@
       "database_id": "00300174-36e2-4357-bc4e-68a1608af01a",
       "migrations_dir": "migrations"
     }
-  ]
+  ],
+  // Workers Logs: full invocation logs persisted (console.* already
+  // structured JSON everywhere; traces off, nothing distributed to trace).
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true,
+      "persist": true
+    }
+  }
 }
