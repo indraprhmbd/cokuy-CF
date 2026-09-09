@@ -22,6 +22,7 @@ import {
   openLoopOrExisting,
   openLoops,
   recentMessagesAfter,
+  recordFeedback,
   recordTurnStat,
   unsummarizedSpan,
   upsertConversationSummary,
@@ -167,13 +168,14 @@ export async function handleUpdate(
     log("error", "load history failed", { err: String(err) });
     return;
   }
-  // Profile facts are tiny and deterministic: loaded whole, injected whole.
+  // Profile facts are tiny and deterministic: loaded whole, injected whole,
+  // newest first with an explicit latest-wins header (0012 precedence rule).
   let profileBlock = "";
   try {
     const facts = await getProfileFacts(env.DB, chatId);
     if (facts.length > 0) {
       profileBlock =
-        "You remember about this user: " +
+        "You remember about this user (newest first; latest fact wins on conflict): " +
         facts.map((f) => `${f.key}=${f.value}`).join("; ") +
         ". Honor the language fact: reply in their language.";
     }
@@ -256,6 +258,60 @@ export async function handleUpdate(
   // Rolling compaction, same waitUntil budget: cheap SQL-first check keeps
   // idle turns at ~zero cost; the LLM call fires only past threshold.
   await compactIfNeeded(env, llm, updateId, convId, priorSummary, log);
+  // 0012 feedback signals: pure local heuristics, one tiny write.
+  await recordFeedSignals(env, updateId, text, history, log);
+}
+
+/** Explicit correction opener (ID + EN). Anchored: only the turn start counts. */
+const CORRECTION_RE =
+  /^(no[,. ]|wrong|not that|bukan|salah|gak|nggak|ngga|jangan|maksud (gue|gw|saya|aku)|actually|eh )/i;
+/** Token overlap at or above this marks the turn a rephrase of the prior ask. */
+const REPHRASE_JACCARD = 0.6;
+
+function contentTokens(s: string): Set<string> {
+  return new Set(
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 2),
+  );
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let inter = 0;
+  for (const w of a) if (b.has(w)) inter++;
+  return inter / (a.size + b.size - inter);
+}
+
+async function recordFeedSignals(
+  env: Env,
+  updateId: number,
+  text: string,
+  history: Array<{ role: string; text: string }>,
+  log: (level: "info" | "warn" | "error", msg: string, extra?: object) => void,
+): Promise<void> {
+  const isCorrection = CORRECTION_RE.test(text.trim());
+  // Prior user ask = last user message before the current turn's own text.
+  // History is chronological and ends with the current user message.
+  let prev: string | null = null;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role !== "user") continue;
+    if (history[i].text.trim() === text.trim()) continue;
+    prev = history[i].text;
+    break;
+  }
+  const isRephrase =
+    prev !== null && jaccard(contentTokens(text), contentTokens(prev)) >= REPHRASE_JACCARD;
+  if (!isCorrection && !isRephrase) return;
+  try {
+    await recordFeedback(env.DB, updateId, isCorrection, isRephrase);
+  } catch (err) {
+    log("warn", "record feedback failed", { err: String(err) });
+    return;
+  }
+  log("info", "feedback signal", { correction: isCorrection, rephrase: isRephrase });
 }
 
 async function detectAndApply(

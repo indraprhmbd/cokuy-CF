@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS turn_feedback(
+  update_id INTEGER PRIMARY KEY,
+  is_correction INTEGER NOT NULL DEFAULT 0,
+  is_rephrase INTEGER NOT NULL DEFAULT 0
+);

@@ -407,7 +407,9 @@ export async function countOutboxSentSince(
 /** Durable per-chat user facts (name, language, prefs). Whole set is tiny; loaded every turn. */
 export async function getProfileFacts(db: D1Database, chatId: number): Promise<ProfileFact[]> {
   const res = await db
-    .prepare("SELECT chat_id AS chatId, key, value FROM profile_facts WHERE chat_id = ? ORDER BY key")
+    .prepare(
+      "SELECT chat_id AS chatId, key, value FROM profile_facts WHERE chat_id = ? ORDER BY updated_at DESC",
+    )
     .bind(chatId)
     .all<ProfileFact>();
   return res.results;
@@ -428,5 +430,24 @@ export async function upsertProfileFact(
          value = excluded.value, updated_at = excluded.updated_at`,
     )
     .bind(chatId, key, value)
+    .run();
+}
+
+/** Dissatisfaction signals per turn: explicit correction, near-duplicate rephrase. */
+export async function recordFeedback(
+  db: D1Database,
+  updateId: number,
+  isCorrection: boolean,
+  isRephrase: boolean,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO turn_feedback(update_id, is_correction, is_rephrase)
+       VALUES (?,?,?)
+       ON CONFLICT (update_id) DO UPDATE SET
+         is_correction = excluded.is_correction,
+         is_rephrase = excluded.is_rephrase`,
+    )
+    .bind(updateId, isCorrection ? 1 : 0, isRephrase ? 1 : 0)
     .run();
 }
