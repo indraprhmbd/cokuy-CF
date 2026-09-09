@@ -287,7 +287,6 @@ async function detectAndApply(
     }
   }
   const det = parsed.det;
-  const now = new Date(Date.now() + WIB_OFFSET_MS);
   for (const id of det.closeIds) {
     await closeLoop(env.DB, id, chatId).catch((err) =>
       log("warn", "detect: close loop failed", { id, err: String(err) }),
@@ -300,8 +299,9 @@ async function detectAndApply(
   }
   for (const r of det.reminders) {
     // Truncate due to the minute: redelivery recomputes the same key, so
-    // INSERT OR IGNORE dedupes the retry (migration 005).
-    const due = new Date(now.getTime() + r.dueInMinutes * 60000);
+    // INSERT OR IGNORE dedupes the retry (migration 005). Real UTC clock:
+    // dueInMinutes is relative to now, never the WIB-shifted wall clock.
+    const due = new Date(Date.now() + r.dueInMinutes * 60000);
     due.setSeconds(0, 0);
     await createReminder(env.DB, chatId, r.text, due).catch((err) =>
       log("warn", "detect: create reminder failed", { err: String(err) }),
