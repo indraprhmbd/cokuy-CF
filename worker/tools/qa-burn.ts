@@ -11,6 +11,8 @@ interface Args {
   secret: string;
   user: number;
   seed: boolean;
+  /** Seconds to wait between questions (rate kindness). */
+  gap: number;
 }
 
 const CHAT_IN_PER_M = 0.03;
@@ -51,7 +53,13 @@ function parseArgs(): Args {
     console.error("need --url --secret --user (or COKUY_URL/COKUY_SECRET/COKUY_USER)");
     process.exit(1);
   }
-  return { url, secret, user: Number(userRaw), seed: a.includes("--seed") };
+  const gapRaw = get("--gap") ?? "15";
+  const gap = Number(gapRaw);
+  if (!Number.isFinite(gap) || gap < 0) {
+    console.error("--gap must be seconds >= 0");
+    process.exit(1);
+  }
+  return { url, secret, user: Number(userRaw), seed: a.includes("--seed"), gap };
 }
 
 function d1(cmd: string): unknown[] {
@@ -167,6 +175,10 @@ async function main(): Promise<void> {
     afterId = cur[0]?.n ?? afterId;
     console.log("  A: " + reply.slice(0, 300));
     replies.push(reply);
+    if (i + 1 < QUESTIONS.length && args.gap > 0) {
+      console.log(`  (gap ${args.gap}s)`);
+      await sleep(args.gap * 1000);
+    }
   }
 
   const ids = QUESTIONS.map((_, i) => base + i).join(",");
