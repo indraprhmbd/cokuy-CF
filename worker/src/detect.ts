@@ -10,6 +10,7 @@ export const MAX_LOOP_CONTEXT_CHARS = 1000;
 /** Caps reminders at 30 days out. */
 export const MAX_REMINDER_MINUTES = 43200;
 export const MAX_PROFILE_VALUE_CHARS = 200;
+export const MAX_MEMORY_TEXT_CHARS = 1000;
 
 export interface LoopCandidate {
   title: string;
@@ -31,6 +32,7 @@ export interface Detection {
   closeIds: number[];
   reminders: ReminderCandidate[];
   profile: ProfileCandidate[];
+  memories: string[];
 }
 
 export function detectSystemPrompt(open: OpenLoop[]): string {
@@ -39,7 +41,8 @@ export function detectSystemPrompt(open: OpenLoop[]): string {
     "Reply with JSON ONLY, no other text, in exactly this shape:\n" +
     '{"loops":[{"title":"short thread name","context":"one-line detail"}],' +
     '"closeIds":[1],"reminders":[{"text":"what to remind","dueInMinutes":120}],' +
-    '"profile":[{"key":"language","value":"Indonesian"}]}\n' +
+    '"profile":[{"key":"language","value":"Indonesian"}],' +
+    '"memories":["durable fact worth recalling later, not chit-chat"]}\n' +
     "Rules: loops = concrete unfinished items (promises, plans, questions awaiting action), " +
     "never chit-chat or already-answered items. closeIds = IDs below clearly resolved this turn. " +
     'reminders = ONLY explicit requests to be reminded ("remind me", "ingatkan", "ingetin", "kasih tau nanti"). ' +
@@ -47,6 +50,8 @@ export function detectSystemPrompt(open: OpenLoop[]): string {
     "profile = durable facts about the user stated or clearly shown this turn: " +
     'their name ("namaku X" -> key=name), the language they write in (key=language, e.g. Indonesian, English), ' +
     "stable preferences (key=pref.<topic>, e.g. pref.coffee). Never guess; empty when nothing stated. " +
+    "memories = candidate long-term memories (facts, decisions, preferences) worth " +
+    "semantic recall later; skip anything already covered by profile or chit-chat. " +
     "Empty lists when nothing qualifies.";
   if (open.length > 0) {
     prompt += "\nOpen loops:";
@@ -68,7 +73,7 @@ export const RECORD_STATE_TOOL = {
     parameters: {
       type: "object",
       additionalProperties: false,
-      required: ["loops", "closeIds", "reminders", "profile"],
+      required: ["loops", "closeIds", "reminders", "profile", "memories"],
       properties: {
         loops: {
           type: "array",
@@ -98,6 +103,7 @@ export const RECORD_STATE_TOOL = {
             properties: { key: { type: "string" }, value: { type: "string" } },
           },
         },
+        memories: { type: "array", items: { type: "string" } },
       },
     },
   },
@@ -146,7 +152,7 @@ function extractPayload(raw: string, toolArgs: string | null): unknown {
 export interface PartialResult {
   det: Detection;
   /** Per-list counts of items dropped (not clamped) by validation. */
-  dropped: { loops: number; closeIds: number; reminders: number; profile: number };
+  dropped: { loops: number; closeIds: number; reminders: number; profile: number; memories: number };
 }
 
 function asArray(v: unknown): unknown[] {
@@ -165,7 +171,7 @@ function clampRunes(s: string, max: number): string {
  */
 export function parseDetection(raw: string, open: OpenLoop[], toolArgs: string | null = null): PartialResult {
   const det = extractPayload(raw, toolArgs) as Record<string, unknown>;
-  const dropped = { loops: 0, closeIds: 0, reminders: 0, profile: 0 };
+  const dropped = { loops: 0, closeIds: 0, reminders: 0, profile: 0, memories: 0 };
   const loops: LoopCandidate[] = [];
   for (const item of asArray(det.loops).slice(0, MAX_DETECT_ITEMS)) {
     const o = (item ?? {}) as Record<string, unknown>;
@@ -210,5 +216,14 @@ export function parseDetection(raw: string, open: OpenLoop[], toolArgs: string |
     }
     profile.push({ key, value: clampRunes(value, MAX_PROFILE_VALUE_CHARS) });
   }
-  return { det: { loops, closeIds, reminders, profile }, dropped };
+  const memories: string[] = [];
+  for (const item of asArray(det.memories).slice(0, MAX_DETECT_ITEMS)) {
+    const text = String(item ?? "").trim();
+    if (!text) {
+      dropped.memories++;
+      continue;
+    }
+    memories.push(clampRunes(text, MAX_MEMORY_TEXT_CHARS));
+  }
+  return { det: { loops, closeIds, reminders, profile, memories }, dropped };
 }

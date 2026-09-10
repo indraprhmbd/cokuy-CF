@@ -5,8 +5,16 @@
 // latter is OpenAI-only, the former is the portable wire format.
 
 export interface LlmMessage {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   text: string;
+  /** Echoed as tool_calls for multi-step continuation. */
+  toolCalls?: Array<{ id: string; name: string; args: string }>;
+}
+
+export interface LlmToolCall {
+  id: string;
+  name: string;
+  args: string;
 }
 
 export interface LlmUsage {
@@ -17,7 +25,10 @@ export interface LlmUsage {
 
 interface ChatCompletionsResponse {
   choices?: Array<{
-    message?: { content?: string; tool_calls?: Array<{ function?: { arguments?: string } }> };
+    message?: {
+      content?: string;
+      tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
+    };
     finish_reason?: string;
   }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
@@ -62,6 +73,10 @@ export class OpenAICompatible {
     profileBlock?: string,
     summaryBlock?: string,
     memoryBlock?: string,
+    toolGuide?: string,
+    tools?: Array<Record<string, unknown>>,
+    maxToolSteps?: number,
+    exec?: (name: string, args: string) => Promise<string>,
   ): Promise<string> {
     let system =
       "You are Cokuy, the mediocre guy in the friend circle: casual, calm, kind, " +
@@ -85,6 +100,7 @@ export class OpenAICompatible {
     if (profileBlock?.trim()) system += ` ${profileBlock.trim()}`;
     if (summaryBlock?.trim()) system += ` ${summaryBlock.trim()}`;
     if (memoryBlock?.trim()) system += ` ${memoryBlock.trim()}`;
+    if (toolGuide?.trim()) system += ` ${toolGuide.trim()}`;
     const messages: LlmMessage[] = [{ role: "system", text: system }];
     for (const m of history) {
       const text = m.text.trim();
@@ -93,10 +109,54 @@ export class OpenAICompatible {
       else if (m.role === "assistant") messages.push({ role: "assistant", text });
       else throw new Error(`invalid message role ${m.role}`);
     }
+    if (tools !== undefined && exec !== undefined) {
+      const looped = await this.chatWithTools(messages, { tools }, maxToolSteps ?? 2, exec);
+      if (!looped.text) throw new Error("llm generate: empty reply");
+      return looped.text;
+    }
     const { text, usage } = await this.complete(messages);
     this.lastUsage = usage;
     if (!text) throw new Error("llm generate: empty reply");
     return text;
+  }
+
+  /**
+   * Mid-turn tool loop (0013 Sprint 2). Runs complete() up to maxSteps+1
+   * times: each round executes returned tool calls via exec and appends
+   * results as role=tool messages. Usage accumulates into lastUsage.
+   * Throws when every round fails or the final text is empty.
+   */
+  async chatWithTools(
+    messages: LlmMessage[],
+    opts: CompleteOptions,
+    maxSteps: number,
+    exec: (name: string, args: string) => Promise<string>,
+  ): Promise<{ text: string; steps: number }> {
+    const convo = messages.slice();
+    const total: LlmUsage = { prompt: 0, completion: 0, total: 0 };
+    let steps = 0;
+    for (;;) {
+      const r = await this.complete(convo, opts);
+      total.prompt += r.usage.prompt;
+      total.completion += r.usage.completion;
+      total.total += r.usage.total;
+      this.lastUsage = { ...total };
+      if (r.toolCalls.length === 0 || steps >= maxSteps) {
+        if (!r.text) throw new Error("llm tools: empty final reply");
+        return { text: r.text, steps };
+      }
+      steps++;
+      convo.push({ role: "assistant", text: r.text, toolCalls: r.toolCalls });
+      for (const tc of r.toolCalls) {
+        let out: string;
+        try {
+          out = await exec(tc.name, tc.args);
+        } catch (err) {
+          out = `error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+        convo.push({ role: "tool", text: out });
+      }
+    }
   }
 
   /** Machine-consumed call with caller-supplied system prompt. Trusts nothing; callers validate. */
@@ -120,7 +180,7 @@ export class OpenAICompatible {
   private async complete(
     messages: LlmMessage[],
     opts: CompleteOptions = {},
-  ): Promise<{ text: string; usage: LlmUsage; toolArgs: string | null }> {
+  ): Promise<{ text: string; usage: LlmUsage; toolArgs: string | null; toolCalls: LlmToolCall[] }> {
     const url = `${this.baseURL.replace(/\/+$/, "")}/chat/completions`;
     const started = Date.now();
     const deadline = started + Math.max(1, this.timeoutSecs) * 1000;
@@ -140,7 +200,19 @@ export class OpenAICompatible {
           // Extras are opportunistic: MiniMax/Sumopod may silently drop them.
           body: JSON.stringify({
             model: this.model,
-            messages: messages.map((m) => ({ role: m.role, content: m.text })),
+            messages: messages.map((m) => ({
+              role: m.role,
+              content: m.text,
+              ...(m.toolCalls !== undefined
+                ? {
+                    tool_calls: m.toolCalls.map((t) => ({
+                      id: t.id,
+                      type: "function",
+                      function: { name: t.name, arguments: t.args },
+                    })),
+                  }
+                : {}),
+            })),
             ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
             ...(opts.maxTokens !== undefined ? { max_tokens: opts.maxTokens } : {}),
             ...(opts.responseFormat !== undefined ? { response_format: opts.responseFormat } : {}),
@@ -157,9 +229,20 @@ export class OpenAICompatible {
         if (!body.choices || body.choices.length === 0) {
           throw new Error("llm generate: no choices in response");
         }
+        const calls: LlmToolCall[] = [];
+        for (const tc of body.choices[0].message?.tool_calls ?? []) {
+          if (tc.function?.name) {
+            calls.push({
+              id: tc.id ?? `call_${calls.length}`,
+              name: tc.function.name,
+              args: tc.function.arguments ?? "{}",
+            });
+          }
+        }
         return {
           text: (body.choices[0].message?.content ?? "").trim(),
-          toolArgs: body.choices[0].message?.tool_calls?.[0]?.function?.arguments ?? null,
+          toolArgs: calls.length > 0 ? calls[0].args : null,
+          toolCalls: calls,
           usage: {
             prompt: body.usage?.prompt_tokens ?? 0,
             completion: body.usage?.completion_tokens ?? 0,

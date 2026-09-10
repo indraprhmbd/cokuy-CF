@@ -23,14 +23,17 @@ import {
   openLoopOrExisting,
   openLoops,
   recentMessagesAfter,
+  recordFactHistory,
   recordFeedback,
   recordTurnStat,
+  saveMemory,
   touchMemories,
   unsummarizedSpan,
   upsertConversationSummary,
   upsertProfileFact,
 } from "./db";
 import { cosine, embedTexts } from "./embed";
+import { executeMemoryTool, MEMORY_TOOL_GUIDE, MEMORY_TOOLS } from "./memory_tools";
 import { detectSystemPrompt as buildDetectPrompt, parseDetection, RECORD_STATE_TOOL } from "./detect";
 import { sanitizeReply } from "./sanitize";
 
@@ -202,8 +205,11 @@ export async function handleUpdate(
 
   // 0013 recall: semantic memories for this query. Router-gated, never
   // blocking: embed failure means zero memories, never a failed turn.
+  // Same gate arms mid-turn memory tools (no schema tax on chit-chat).
   let memoryBlock = "";
+  let toolsOn = false;
   if ([...text].length > RECALL_SKIP_RUNES) {
+    toolsOn = true;
     memoryBlock = await recallMemories(env, updateId, chatId, text, log);
   }
 
@@ -214,7 +220,11 @@ export async function handleUpdate(
   }, TYPING_INTERVAL_MS);
   let reply: string;
   try {
-    reply = await llm.generate(history, profileBlock, summaryBlock, memoryBlock);
+    reply = toolsOn
+      ? await llm.generate(history, profileBlock, summaryBlock, memoryBlock, MEMORY_TOOL_GUIDE, MEMORY_TOOLS, 2, (name, args) =>
+          executeMemoryTool(env, chatId, updateId, name, args),
+        )
+      : await llm.generate(history, profileBlock, summaryBlock, memoryBlock);
   } catch (err) {
     clearInterval(typer);
     const latencyMs = Date.now() - started;
@@ -514,9 +524,44 @@ async function detectAndApply(
       log("warn", "detect: save profile fact failed", { key: p.key, err: String(err) }),
     );
   }
+  // Safety-net memory saves: embed + persist detector candidates the
+  // mid-turn tools did not already handle. Failures only log.
+  if (det.memories.length > 0) {
+    const cfg =
+      env.LLM_BASE_URL && env.LLM_API_KEY && env.LLM_EMBED_MODEL
+        ? { baseURL: env.LLM_BASE_URL, apiKey: env.LLM_API_KEY, model: env.LLM_EMBED_MODEL }
+        : null;
+    let extra: Record<string, string> = {};
+    if (env.LLM_EXTRA_HEADERS?.trim()) {
+      try {
+        extra = JSON.parse(env.LLM_EXTRA_HEADERS) as Record<string, string>;
+      } catch {
+        log("warn", "detect: bad extra headers, skipping memory saves");
+      }
+    }
+    if (cfg && Object.keys(extra).length >= 0) {
+      let vecs: number[][] = [];
+      try {
+        vecs = (await embedTexts(cfg.baseURL, cfg.apiKey, cfg.model, det.memories, extra)).vectors;
+      } catch (err) {
+        log("warn", "detect: memory embed failed", { err: String(err) });
+      }
+      for (let i = 0; i < det.memories.length && i < vecs.length; i++) {
+        const text = det.memories[i] ?? "";
+        const vec = vecs[i] ?? [];
+        if (!text || vec.length === 0) continue;
+        try {
+          const id = await saveMemory(env.DB, chatId, text, vec);
+          await recordFactHistory(env.DB, "memories", id, null, text, updateId).catch(() => undefined);
+        } catch (err) {
+          log("warn", "detect: save memory failed", { err: String(err) });
+        }
+      }
+    }
+  }
   log("info", "detect: applied", {
     loops: det.loops.length, closed: det.closeIds.length, reminders: det.reminders.length,
-    profile: det.profile.length,
+    profile: det.profile.length, memories: det.memories.length,
   });
 }
 

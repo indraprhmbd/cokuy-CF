@@ -1,6 +1,6 @@
 # 0013 — Agentic memory: semantic recall + memory-as-tools (CF)
 
-Status: accepted, Sprint 1 building
+Status: accepted, Sprint 1 + Sprint 2 shipped
 Date: 2026-09-09
 
 ## Embed source (decided)
@@ -71,6 +71,11 @@ zero memories, logged, never blocking.
 3. Overwrite guard: `update_fact` on an existing key requires the
    model's stated reason AND surfaces a Telegram confirm on conflict
    (Phase B of 0012 pattern). No silent overwrites, ever.
+   As-shipped deviation: memory text updates apply immediately with
+   full audit (`fact_history` old/new/source turn) because mid-turn
+   confirmation is impossible; the confirm gate stays scoped to
+   profile-fact overwrites (higher stakes, explicit identity data).
+   Weekly consolidation can revert bad memory updates from history.
 4. Post-turn detector stays as safety net; `record_state` schema gains
    optional `memories[]` (candidate long-term memories from the turn).
 5. Failure modes: embed call fails -> turn proceeds with zero memories

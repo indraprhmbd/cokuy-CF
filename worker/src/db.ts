@@ -508,6 +508,21 @@ export async function touchMemories(db: D1Database, ids: number[]): Promise<void
   }
 }
 
+/** Chat-scoped memory text + embedding replacement. Returns true when a row moved. */
+export async function updateMemory(
+  db: D1Database,
+  id: number,
+  chatId: number,
+  text: string,
+  embedding: number[],
+): Promise<boolean> {
+  const res = await db
+    .prepare("UPDATE memories SET text = ?, embedding = ? WHERE id = ? AND chat_id = ?")
+    .bind(text, JSON.stringify(embedding), id, chatId)
+    .run();
+  return (res.meta.changes ?? 0) === 1;
+}
+
 /** Audit trail for fact/memory mutations: who changed what, from which turn. */
 export async function recordFactHistory(
   db: D1Database,
