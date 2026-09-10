@@ -26,7 +26,9 @@ const DEFAULT_PRICE_IN_PER_M = 0.03;
 const DEFAULT_PRICE_OUT_PER_M = 0.12;
 
 function pricePerM(raw: string | undefined, fallback: number): number {
-  const n = Number((raw ?? "").trim());
+  const t = (raw ?? "").trim();
+  if (!t) return fallback;
+  const n = Number(t);
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
