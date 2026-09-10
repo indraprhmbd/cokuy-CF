@@ -63,10 +63,11 @@ function parseArgs(): Args {
 }
 
 function d1(cmd: string): unknown[] {
+  // shell:true (Windows npx shim) word-splits args, so quote the SQL.
   const out = execFileSync(
     "npx",
-    ["wrangler", "d1", "execute", "cokuy-cf", "--remote", "--command", cmd, "--json"],
-    { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+    ["wrangler", "d1", "execute", "cokuy-cf", "--remote", "--command", `"${cmd}"`, "--json"],
+    { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, shell: true },
   );
   const parsed = JSON.parse(out) as Array<{ results?: unknown[] }>;
   return parsed[0]?.results ?? [];
@@ -97,10 +98,27 @@ async function seedMemories(user: number): Promise<void> {
   }
   body.data.forEach((d, i) => {
     if (!Array.isArray(d.embedding) || d.embedding.length === 0) throw new Error("seed bad vector " + i);
-    d1(
-      `INSERT INTO memories(chat_id, text, embedding) VALUES (${user}, ${sqlStr(SEED_MEMORIES[i] ?? "")}, ${sqlStr(JSON.stringify(d.embedding))});`,
-    );
   });
+  // --file, not --command: one embedding JSON (~12KB) already exceeds the
+  // Windows 8k command-line limit.
+  const fs = await import("node:fs");
+  const path = "_temp_seed_mem.sql";
+  const sql = body.data
+    .map(
+      (d, i) =>
+        `INSERT INTO memories(chat_id, text, embedding) VALUES (${user}, ${sqlStr(SEED_MEMORIES[i] ?? "")}, ${sqlStr(JSON.stringify(d.embedding))});`,
+    )
+    .join("\n");
+  fs.writeFileSync(path, sql);
+  try {
+    execFileSync("npx", ["wrangler", "d1", "execute", "cokuy-cf", "--remote", "--file", path, "--json"], {
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      shell: true,
+    });
+  } finally {
+    fs.rmSync(path, { force: true });
+  }
   console.log("seed done.");
 }
 
