@@ -19,6 +19,8 @@ export interface Env {
   LLM_MODEL?: string;
   /** Embedding model for semantic recall (wrangler var, e.g. text-embedding-3-small). */
   LLM_EMBED_MODEL?: string;
+  /** Recall vector width (Matryoshka prefix); default 256. */
+  LLM_EMBED_DIMS?: string;
   /** Optional JSON object of extra headers (e.g. OpenRouter HTTP-Referer/X-Title). */
   LLM_EXTRA_HEADERS?: string;
   /** Optional positive integer seconds; default 60. */

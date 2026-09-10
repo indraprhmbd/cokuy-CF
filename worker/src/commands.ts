@@ -3,7 +3,7 @@
 // Called from /telegram after the allowlist gate, inside waitUntil.
 
 import type { Env } from "./env";
-import { embedTexts } from "./embed";
+import { embedDims, embedTexts } from "./embed";
 import { createSender } from "./telegram";
 import {
   claimUpdate,
@@ -187,11 +187,12 @@ export async function handleCommand(
       }
     }
     try {
+      const dims = embedDims(env.LLM_EMBED_DIMS);
       const vec = (
-        await embedTexts(env.LLM_BASE_URL, env.LLM_API_KEY, env.LLM_EMBED_MODEL, [arg], extra)
+        await embedTexts(env.LLM_BASE_URL, env.LLM_API_KEY, env.LLM_EMBED_MODEL, [arg], extra, dims)
       ).vectors[0] ?? [];
       if (vec.length === 0) throw new Error("empty embedding");
-      const id = await saveMemory(env.DB, chatId, arg.slice(0, 1000), vec);
+      const id = await saveMemory(env.DB, chatId, arg.slice(0, 1000), vec, dims);
       await recordFactHistory(env.DB, "memories", id, null, arg, updateId).catch(() => undefined);
       await reply(`Kesimpen [m${id}]. Gue inget.`);
     } catch (err) {

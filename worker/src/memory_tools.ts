@@ -5,10 +5,12 @@
 // invalid shapes return errors as tool results (never throw into the loop).
 
 import type { Env } from "./env";
-import { cosine, embedTexts } from "./embed";
+import { bytesToF32, cosine, dot, embedDims, embedTexts, f32ToBytes, toUnitVec } from "./embed";
 import { usageReport } from "./commands";
 import {
+  backfillEmb,
   memoriesForChat,
+  memoriesForRecall,
   recordFactHistory,
   saveMemory,
   updateMemory,
@@ -134,34 +136,50 @@ export async function executeMemoryTool(
     const k = typeof kRaw === "number" && Number.isInteger(kRaw) ? Math.min(Math.max(kRaw, 1), TOOL_TOP_K) : TOOL_TOP_K;
     const cfg = embedCfg(env);
     if (!cfg) return "error: embeddings unconfigured";
-    let qv: number[];
+    const dims = embedDims(env.LLM_EMBED_DIMS);
+    let qv: Float32Array;
     try {
-      qv = (await embedTexts(cfg.baseURL, cfg.apiKey, cfg.model, [query], cfg.extra)).vectors[0] ?? [];
+      const r = await embedTexts(cfg.baseURL, cfg.apiKey, cfg.model, [query], cfg.extra, dims);
+      qv = toUnitVec(r.vectors[0] ?? [], dims);
     } catch (err) {
       return `error: embed failed: ${err instanceof Error ? err.message : String(err)}`;
     }
-    const rows = await memoriesForChat(env.DB, chatId, 2000);
-    const hits = rows
-      .map((m) => ({ m, s: cosine(qv, m.embedding) }))
-      .filter((x) => x.s >= TOOL_THRESHOLD)
-      .sort((a, b) => b.s - a.s)
-      .slice(0, k)
-      .map((x) => ({ id: x.m.id, text: x.m.text, score: Math.round(x.s * 1000) / 1000 }));
-    return JSON.stringify(hits);
+    const { rows } = await memoriesForRecall(env.DB, chatId, 500);
+    const hits: Array<{ id: number; text: string; score: number }> = [];
+    for (const m of rows) {
+      let v = bytesToF32(m.emb);
+      if (!v && m.legacy) {
+        try {
+          const arr = JSON.parse(m.legacy) as unknown;
+          if (Array.isArray(arr) && arr.length > 0) {
+            v = toUnitVec(arr as number[], dims);
+            await backfillEmb(env.DB, m.id, f32ToBytes(v)).catch(() => undefined);
+          }
+        } catch {
+          continue;
+        }
+      }
+      if (!v) continue;
+      const s = dot(qv, v);
+      if (s >= TOOL_THRESHOLD) hits.push({ id: m.id, text: m.text, score: Math.round(s * 1000) / 1000 });
+    }
+    hits.sort((a, b) => b.score - a.score);
+    return JSON.stringify(hits.slice(0, k));
   }
   if (name === "save_fact") {
     const text = typeof args["text"] === "string" ? args["text"].trim() : "";
     if (!text) return "error: text is empty";
     const cfg = embedCfg(env);
     if (!cfg) return "error: embeddings unconfigured";
+    const dims = embedDims(env.LLM_EMBED_DIMS);
     let vec: number[];
     try {
-      vec = (await embedTexts(cfg.baseURL, cfg.apiKey, cfg.model, [text], cfg.extra)).vectors[0] ?? [];
+      vec = (await embedTexts(cfg.baseURL, cfg.apiKey, cfg.model, [text], cfg.extra, dims)).vectors[0] ?? [];
     } catch (err) {
       return `error: embed failed: ${err instanceof Error ? err.message : String(err)}`;
     }
     if (vec.length === 0) return "error: empty embedding";
-    const id = await saveMemory(env.DB, chatId, clampRunes(text, MAX_FACT_CHARS), vec);
+    const id = await saveMemory(env.DB, chatId, clampRunes(text, MAX_FACT_CHARS), vec, dims);
     await recordFactHistory(env.DB, "memories", id, null, text, updateId).catch(() => undefined);
     return JSON.stringify({ saved_id: id });
   }
@@ -177,14 +195,15 @@ export async function executeMemoryTool(
     const rows = await memoriesForChat(env.DB, chatId, 2000);
     const cur = rows.find((r) => r.id === (id as number));
     if (!cur) return "error: no memory with that id for this chat";
+    const dims = embedDims(env.LLM_EMBED_DIMS);
     let vec: number[];
     try {
-      vec = (await embedTexts(cfg.baseURL, cfg.apiKey, cfg.model, [text], cfg.extra)).vectors[0] ?? [];
+      vec = (await embedTexts(cfg.baseURL, cfg.apiKey, cfg.model, [text], cfg.extra, dims)).vectors[0] ?? [];
     } catch (err) {
       return `error: embed failed: ${err instanceof Error ? err.message : String(err)}`;
     }
     if (vec.length === 0) return "error: empty embedding";
-    await updateMemory(env.DB, cur.id, chatId, clampRunes(text, MAX_FACT_CHARS), vec);
+    await updateMemory(env.DB, cur.id, chatId, clampRunes(text, MAX_FACT_CHARS), vec, dims);
     await recordFactHistory(env.DB, "memories", cur.id, cur.text, text, updateId).catch(() => undefined);
     return JSON.stringify({ updated_id: cur.id });
   }

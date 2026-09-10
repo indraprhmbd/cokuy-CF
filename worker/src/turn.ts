@@ -19,7 +19,7 @@ import {
   getOrCreateConversation,
   getProfileFacts,
   markUpdateProcessed,
-  memoriesForChat,
+  memoriesForRecall,
   messagesChunk,
   openLoopOrExisting,
   openLoops,
@@ -29,11 +29,13 @@ import {
   recordTurnStat,
   saveMemory,
   touchMemories,
+  backfillEmb,
+  type RecallRow,
   unsummarizedSpan,
   upsertConversationSummary,
   upsertProfileFact,
 } from "./db";
-import { cosine, embedTexts } from "./embed";
+import { bytesToF32, dot, embedDims, embedTexts, f32ToBytes, toUnitVec } from "./embed";
 import { executeMemoryTool, MEMORY_TOOL_GUIDE, MEMORY_TOOLS } from "./memory_tools";
 import { detectSystemPrompt as buildDetectPrompt, parseDetection, RECORD_STATE_TOOL } from "./detect";
 import { sanitizeReply } from "./sanitize";
@@ -64,7 +66,8 @@ const RECALL_TOP_K = 5;
 const RECALL_BUDGET_CHARS = 1500;
 /** Below this length the turn is pure ack; embedding it wastes a call. */
 const RECALL_SKIP_RUNES = 6;
-const RECALL_MAX_ROWS = 2000;
+/** Bounded newest-first scan window (0017). Total rides along for cap math. */
+const RECALL_MAX_ROWS = 500;
 
 function truncate(s: string, max: number): string {
   const runes = [...s];
@@ -368,63 +371,87 @@ async function recallMemories(
       return "";
     }
   }
+  const dims = embedDims(env.LLM_EMBED_DIMS);
   const started = Date.now();
-  let query: number[];
-  let dims = 0;
+  let query: Float32Array;
+  let gotDims = 0;
   let promptTokens = 0;
   try {
-    const r = await embedTexts(baseURL, apiKey, model, [text], extra);
-    query = r.vectors[0];
-    dims = r.dims;
+    const r = await embedTexts(baseURL, apiKey, model, [text], extra, dims);
+    query = toUnitVec(r.vectors[0], dims);
+    gotDims = r.dims;
     promptTokens = r.usage.prompt;
   } catch (err) {
     log("warn", "recall: embed failed", { err: String(err) });
     return "";
   }
-  log("info", "recall: embedded", { dims, latency_ms: Date.now() - started });
-  let rows;
+  log("info", "recall: embedded", { dims: gotDims, latency_ms: Date.now() - started });
+  let rows: RecallRow[];
+  let total = 0;
   try {
-    rows = await memoriesForChat(env.DB, chatId, RECALL_MAX_ROWS);
+    const w = await memoriesForRecall(env.DB, chatId, RECALL_MAX_ROWS);
+    rows = w.rows;
+    total = w.total;
   } catch (err) {
     log("warn", "recall: load memories failed", { err: String(err) });
     return "";
   }
-  const scored = rows
-    .map((m) => ({ m, s: cosine(query, m.embedding) }))
-    .filter((x) => x.s >= RECALL_THRESHOLD)
-    .sort((a, b) => b.s - a.s)
-    .slice(0, RECALL_TOP_K);
+  // Resolve vectors: BLOB first, legacy JSON self-heals into BLOB.
+  const backfill: Array<{ id: number; bytes: ArrayBuffer }> = [];
+  const scored: Array<{ id: number; text: string; s: number }> = [];
+  for (const m of rows) {
+    let v = bytesToF32(m.emb);
+    if (!v && m.legacy) {
+      try {
+        const arr = JSON.parse(m.legacy) as unknown;
+        if (Array.isArray(arr) && arr.length > 0) {
+          v = toUnitVec(arr as number[], dims);
+          backfill.push({ id: m.id, bytes: f32ToBytes(v) });
+        }
+      } catch {
+        continue;
+      }
+    }
+    if (!v) continue;
+    const s = dot(query, v);
+    if (s >= RECALL_THRESHOLD) scored.push({ id: m.id, text: m.text, s });
+  }
+  scored.sort((a, b) => b.s - a.s);
+  const top = scored.slice(0, RECALL_TOP_K);
   const recallMs = Date.now() - started;
   const recordRecall = (error: string) =>
     recordTurnStat(env.DB, {
       updateId, kind: "recall", chatId, promptTokens, completionTokens: 0,
       totalTokens: promptTokens, model, latencyMs: recallMs, error,
     }).catch((err) => log("warn", "recall: stat failed", { err: String(err) }));
-  if (scored.length === 0) {
-    log("info", "recall: no hit", { scanned: rows.length });
+  if (top.length === 0) {
+    log("info", "recall: no hit", { scanned: rows.length, total, dims });
     await recordRecall("");
     return "";
   }
   // Budget newest-first? No: score order carries relevance; clamp lines.
-  let total = 0;
-  const kept: typeof scored = [];
-  for (const x of scored) {
-    const len = [...x.m.text].length;
-    if (total + len > RECALL_BUDGET_CHARS && kept.length > 0) break;
-    total += len;
+  let chars = 0;
+  const kept: typeof top = [];
+  for (const x of top) {
+    const len = [...x.text].length;
+    if (chars + len > RECALL_BUDGET_CHARS && kept.length > 0) break;
+    chars += len;
     kept.push(x);
   }
-  const ids = kept.map((x) => x.m.id);
+  const ids = kept.map((x) => x.id);
   await touchMemories(env.DB, ids).catch((err) =>
     log("warn", "recall: touch failed", { err: String(err) }),
   );
+  for (const b of backfill) {
+    await backfillEmb(env.DB, b.id, b.bytes).catch(() => undefined);
+  }
   await recordRecall("");
   log("info", "recall: hit", {
-    kept: kept.length, scanned: rows.length, top: kept[0].s.toFixed(3),
+    kept: kept.length, scanned: rows.length, total, dims, top: kept[0].s.toFixed(3),
   });
   return (
     "Relevant past memories ([mID] = memory id, most relevant first): " +
-    kept.map((x) => `[m${x.m.id}] ${truncate(x.m.text.trim(), 400)}`).join(" | ")
+    kept.map((x) => `[m${x.id}] ${truncate(x.text.trim(), 400)}`).join(" | ")
   );
 }
 
@@ -551,16 +578,19 @@ async function detectAndApply(
     if (cfg && Object.keys(extra).length >= 0) {
       let vecs: number[][] = [];
       try {
-        vecs = (await embedTexts(cfg.baseURL, cfg.apiKey, cfg.model, det.memories, extra)).vectors;
+        vecs = (
+          await embedTexts(cfg.baseURL, cfg.apiKey, cfg.model, det.memories, extra, embedDims(env.LLM_EMBED_DIMS))
+        ).vectors;
       } catch (err) {
         log("warn", "detect: memory embed failed", { err: String(err) });
       }
+      const dims = embedDims(env.LLM_EMBED_DIMS);
       for (let i = 0; i < det.memories.length && i < vecs.length; i++) {
         const text = det.memories[i] ?? "";
         const vec = vecs[i] ?? [];
         if (!text || vec.length === 0) continue;
         try {
-          const id = await saveMemory(env.DB, chatId, text, vec);
+          const id = await saveMemory(env.DB, chatId, text, vec, dims);
           await recordFactHistory(env.DB, "memories", id, null, text, updateId).catch(() => undefined);
         } catch (err) {
           log("warn", "detect: save memory failed", { err: String(err) });

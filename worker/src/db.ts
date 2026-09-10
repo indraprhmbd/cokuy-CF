@@ -4,6 +4,8 @@
 // double-reply or double-send. Timestamps use the same strftime-compact UTC
 // format so lexicographic comparisons stay correct.
 
+import { f32ToBytes, toUnitVec } from "./embed";
+
 export interface ChatMessage {
   role: string;
   text: string;
@@ -543,16 +545,17 @@ export interface StoredMemory {
   embedding: number[];
 }
 
-/** Saves one memory; returns its id. Embedding stored as JSON float array. */
+/** Saves one memory; returns its id. Embedding stored as JSON (legacy read path) + normalized BLOB. */
 export async function saveMemory(
   db: D1Database,
   chatId: number,
   text: string,
   embedding: number[],
+  dims: number,
 ): Promise<number> {
   const res = await db
-    .prepare("INSERT INTO memories(chat_id, text, embedding) VALUES (?,?,?)")
-    .bind(chatId, text, JSON.stringify(embedding))
+    .prepare("INSERT INTO memories(chat_id, text, embedding, emb) VALUES (?,?,?,?)")
+    .bind(chatId, text, JSON.stringify(embedding), f32ToBytes(toUnitVec(embedding, dims)))
     .run();
   if (res.meta.last_row_id == null) throw new Error("save memory: missing row id");
   return res.meta.last_row_id;
@@ -600,12 +603,47 @@ export async function updateMemory(
   chatId: number,
   text: string,
   embedding: number[],
+  dims: number,
 ): Promise<boolean> {
   const res = await db
-    .prepare("UPDATE memories SET text = ?, embedding = ? WHERE id = ? AND chat_id = ?")
-    .bind(text, JSON.stringify(embedding), id, chatId)
+    .prepare("UPDATE memories SET text = ?, embedding = ?, emb = ? WHERE id = ? AND chat_id = ?")
+    .bind(text, JSON.stringify(embedding), f32ToBytes(toUnitVec(embedding, dims)), id, chatId)
     .run();
   return (res.meta.changes ?? 0) === 1;
+}
+
+/** Recall window: newest-first bounded scan + total for cap-warning math. */
+export interface RecallRow {
+  id: number;
+  text: string;
+  emb: ArrayBuffer | null;
+  legacy: string | null;
+}
+
+export async function memoriesForRecall(
+  db: D1Database,
+  chatId: number,
+  limit: number,
+): Promise<{ rows: RecallRow[]; total: number }> {
+  const res = await db
+    .prepare(
+      "SELECT id, text, emb, embedding AS legacy FROM memories WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?",
+    )
+    .bind(chatId, limit)
+    .all<{ id: number; text: string; emb: ArrayBuffer | null; legacy: string }>();
+  const cnt = await db
+    .prepare("SELECT COUNT(*) AS n FROM memories WHERE chat_id = ?")
+    .bind(chatId)
+    .first<{ n: number }>();
+  return {
+    rows: res.results.map((r) => ({ id: r.id, text: r.text, emb: r.emb, legacy: r.legacy })),
+    total: cnt?.n ?? 0,
+  };
+}
+
+/** Lazy backfill: writes the normalized BLOB for a legacy JSON-embedding row. */
+export async function backfillEmb(db: D1Database, id: number, bytes: ArrayBuffer): Promise<void> {
+  await db.prepare("UPDATE memories SET emb = ? WHERE id = ?").bind(bytes, id).run();
 }
 
 /** Audit trail for fact/memory mutations: who changed what, from which turn. */
