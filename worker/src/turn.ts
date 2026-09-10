@@ -231,7 +231,7 @@ export async function handleUpdate(
     const latencyMs = Date.now() - started;
     log("error", "llm failed", { err: String(err) });
     await recordTurnStat(env.DB, {
-      updateId, kind: "chat", promptTokens: 0, completionTokens: 0, totalTokens: 0,
+      updateId, kind: "chat", chatId, promptTokens: 0, completionTokens: 0, totalTokens: 0,
       model: llm.modelName, latencyMs, error: String(err),
     }).catch((e) => log("error", "record stat failed", { err: String(e) }));
     await sender.sendReply(chatId, "Maaf, aku lagi gagal mikir. Coba lagi sebentar ya.").catch((e) =>
@@ -255,7 +255,7 @@ export async function handleUpdate(
   if (!reply) {
     log("error", "empty model reply");
     await recordTurnStat(env.DB, {
-      updateId, kind: "chat", promptTokens: usage.prompt, completionTokens: usage.completion,
+      updateId, kind: "chat", chatId, promptTokens: usage.prompt, completionTokens: usage.completion,
       totalTokens: usage.total, model: llm.modelName, latencyMs, error: "empty model reply",
     }).catch((e) => log("error", "record stat failed", { err: String(e) }));
     return;
@@ -278,7 +278,7 @@ export async function handleUpdate(
     log("error", "mark processed failed", { err: String(err) }),
   );
   await recordTurnStat(env.DB, {
-    updateId, kind: "chat", promptTokens: usage.prompt, completionTokens: usage.completion,
+    updateId, kind: "chat", chatId, promptTokens: usage.prompt, completionTokens: usage.completion,
     totalTokens: usage.total, model: llm.modelName, latencyMs, error: "",
   }).catch((err) => log("error", "record stat failed", { err: String(err) }));
 
@@ -286,7 +286,7 @@ export async function handleUpdate(
   await detectAndApply(env, llm, updateId, chatId, text, reply, log);
   // Rolling compaction, same waitUntil budget: cheap SQL-first check keeps
   // idle turns at ~zero cost; the LLM call fires only past threshold.
-  await compactIfNeeded(env, llm, updateId, convId, priorSummary, log);
+  await compactIfNeeded(env, llm, updateId, convId, chatId, priorSummary, log);
   // 0012 feedback signals: pure local heuristics, one tiny write.
   await recordFeedSignals(env, updateId, text, history, log);
 }
@@ -397,7 +397,7 @@ async function recallMemories(
   const recallMs = Date.now() - started;
   const recordRecall = (error: string) =>
     recordTurnStat(env.DB, {
-      updateId, kind: "recall", promptTokens, completionTokens: 0,
+      updateId, kind: "recall", chatId, promptTokens, completionTokens: 0,
       totalTokens: promptTokens, model, latencyMs: recallMs, error,
     }).catch((err) => log("warn", "recall: stat failed", { err: String(err) }));
   if (scored.length === 0) {
@@ -462,7 +462,7 @@ async function detectAndApply(
   };
   const recordDetect = (error: string) =>
     recordTurnStat(env.DB, {
-      updateId, kind: "detect", promptTokens: used.prompt, completionTokens: used.completion,
+      updateId, kind: "detect", chatId, promptTokens: used.prompt, completionTokens: used.completion,
       totalTokens: used.total, model: llm.modelName, latencyMs: Date.now() - started, error,
     }).catch((e) => log("warn", "record detect stat failed", { err: String(e) }));
   let raw: string;
@@ -587,6 +587,7 @@ async function compactIfNeeded(
   llm: OpenAICompatible,
   updateId: number,
   convId: number,
+  chatId: number,
   priorSummary: string,
   log: (level: "info" | "warn" | "error", msg: string, extra?: object) => void,
 ): Promise<void> {
@@ -655,7 +656,7 @@ async function compactIfNeeded(
   }
   const u = llm.lastUsage;
   await recordTurnStat(env.DB, {
-    updateId, kind: "summary", promptTokens: u.prompt, completionTokens: u.completion,
+    updateId, kind: "summary", chatId, promptTokens: u.prompt, completionTokens: u.completion,
     totalTokens: u.total, model: llm.modelName, latencyMs: Date.now() - sumStarted, error: "",
   }).catch((err) => log("warn", "compact: record stat failed", { err: String(err) }));
   log("info", "compact: summary advanced", { through: throughId, chars: [...next].length });

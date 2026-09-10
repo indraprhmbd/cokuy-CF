@@ -13,6 +13,7 @@ export interface TurnStat {
   updateId: number;
   /** 'chat' | 'detect' | 'summary' | 'nudge'. Composite PK with updateId. */
   kind: string;
+  chatId: number;
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
@@ -194,9 +195,10 @@ export async function upsertConversationSummary(
 export async function recordTurnStat(db: D1Database, s: TurnStat): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO turn_stats(update_id, kind, prompt_tokens, completion_tokens, total_tokens, model, latency_ms, error)
-       VALUES (?,?,?,?,?,?,?,?)
+      `INSERT INTO turn_stats(update_id, kind, chat_id, prompt_tokens, completion_tokens, total_tokens, model, latency_ms, error)
+       VALUES (?,?,?,?,?,?,?,?,?)
        ON CONFLICT(update_id, kind) DO UPDATE SET
+         chat_id = excluded.chat_id,
          prompt_tokens = excluded.prompt_tokens,
          completion_tokens = excluded.completion_tokens,
          total_tokens = excluded.total_tokens,
@@ -207,6 +209,7 @@ export async function recordTurnStat(db: D1Database, s: TurnStat): Promise<void>
     .bind(
       s.updateId,
       s.kind,
+      s.chatId,
       s.promptTokens,
       s.completionTokens,
       s.totalTokens,
@@ -215,6 +218,88 @@ export async function recordTurnStat(db: D1Database, s: TurnStat): Promise<void>
       s.error,
     )
     .run();
+}
+
+/** Per-kind token sums for one chat since an ISO instant. One grouped query. */
+export interface UsageSums {
+  kind: string;
+  turns: number;
+  prompt: number;
+  completion: number;
+  errors: number;
+}
+
+export async function usageSums(
+  db: D1Database,
+  chatId: number,
+  sinceIso: string,
+): Promise<UsageSums[]> {
+  const res = await db
+    .prepare(
+      `SELECT kind, COUNT(*) AS turns,
+         COALESCE(SUM(prompt_tokens),0) AS prompt,
+         COALESCE(SUM(completion_tokens),0) AS completion,
+         SUM(CASE WHEN error != '' THEN 1 ELSE 0 END) AS errors
+       FROM turn_stats WHERE chat_id = ? AND created_at >= ?
+       GROUP BY kind ORDER BY kind`,
+    )
+    .bind(chatId, sinceIso)
+    .all<UsageSums>();
+  return res.results;
+}
+
+/** Upserts chat prefs (quiet window + briefing time). Validated by callers. */
+export async function setPrefs(
+  db: D1Database,
+  chatId: number,
+  quietStart: number,
+  quietEnd: number,
+  briefTime: string,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO prefs(chat_id, quiet_start, quiet_end, brief_time)
+       VALUES (?,?,?,?)
+       ON CONFLICT(chat_id) DO UPDATE SET
+         quiet_start = excluded.quiet_start,
+         quiet_end = excluded.quiet_end,
+         brief_time = excluded.brief_time`,
+    )
+    .bind(chatId, quietStart, quietEnd, briefTime)
+    .run();
+}
+
+/** Deletes memories whose text matches a LIKE keyword. Returns removed texts. */
+export async function deleteMemoriesByKeyword(
+  db: D1Database,
+  chatId: number,
+  keyword: string,
+): Promise<string[]> {
+  const rows = await db
+    .prepare("SELECT id, text FROM memories WHERE chat_id = ? AND text LIKE ? ESCAPE '\\' LIMIT 20")
+    .bind(chatId, `%${keyword.replace(/[\\%_]/g, (c) => `\\${c}`)}%`)
+    .all<{ id: number; text: string }>();
+  for (const r of rows.results) {
+    await db.prepare("DELETE FROM memories WHERE id = ?").bind(r.id).run();
+  }
+  return rows.results.map((r) => r.text);
+}
+
+/** Deletes profile facts whose key or value matches. Returns removed pairs. */
+export async function deleteProfileFactsByKeyword(
+  db: D1Database,
+  chatId: number,
+  keyword: string,
+): Promise<string[]> {
+  const like = `%${keyword.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  const rows = await db
+    .prepare("SELECT key, value FROM profile_facts WHERE chat_id = ? AND (key LIKE ? ESCAPE '\\' OR value LIKE ? ESCAPE '\\') LIMIT 20")
+    .bind(chatId, like, like)
+    .all<{ key: string; value: string }>();
+  for (const r of rows.results) {
+    await db.prepare("DELETE FROM profile_facts WHERE chat_id = ? AND key = ?").bind(chatId, r.key).run();
+  }
+  return rows.results.map((r) => `${r.key}=${r.value}`);
 }
 
 export async function openLoops(db: D1Database, chatId: number): Promise<OpenLoop[]> {

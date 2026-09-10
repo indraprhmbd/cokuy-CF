@@ -6,6 +6,7 @@
 
 import type { Env } from "./env";
 import { cosine, embedTexts } from "./embed";
+import { usageReport } from "./commands";
 import {
   memoriesForChat,
   recordFactHistory,
@@ -65,14 +66,30 @@ export const UPDATE_FACT_TOOL = {
   },
 };
 
-export const MEMORY_TOOLS = [RECALL_TOOL, SAVE_FACT_TOOL, UPDATE_FACT_TOOL];
+export const USAGE_TOOL = {
+  type: "function",
+  function: {
+    name: "get_usage",
+    description:
+      "Read this chat's token usage and cost (today + 7 days) from the usage ledger. Call when the user asks about cost, tokens, or pemakaian.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: [],
+      properties: {},
+    },
+  },
+};
+
+export const MEMORY_TOOLS = [RECALL_TOOL, SAVE_FACT_TOOL, UPDATE_FACT_TOOL, USAGE_TOOL];
 
 export const MEMORY_TOOL_GUIDE =
   "Memory tools: call recall_memories when you need past context not in " +
   "this conversation; call save_fact when the user states a durable " +
   "preference, identity detail, or decision (one fact per call, never " +
   "chit-chat); call update_fact with the [mID] when the user corrects a " +
-  "stored memory. Never invent memory IDs.";
+  "stored memory. Never invent memory IDs; call get_usage when the user " +
+  "asks about token usage or cost.";
 
 const MAX_FACT_CHARS = 1000;
 const TOOL_TOP_K = 5;
@@ -170,6 +187,19 @@ export async function executeMemoryTool(
     await updateMemory(env.DB, cur.id, chatId, clampRunes(text, MAX_FACT_CHARS), vec);
     await recordFactHistory(env.DB, "memories", cur.id, cur.text, text, updateId).catch(() => undefined);
     return JSON.stringify({ updated_id: cur.id });
+  }
+  if (name === "get_usage") {
+    try {
+      const r = await usageReport(env, chatId);
+      return JSON.stringify({
+        lines: r.lines,
+        prompt_tokens_7d: r.prompt,
+        completion_tokens_7d: r.completion,
+        usd_7d: Math.round(r.usd * 1e7) / 1e7,
+      });
+    } catch (err) {
+      return `error: usage read failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
   }
   return `error: unknown tool ${name}`;
 }

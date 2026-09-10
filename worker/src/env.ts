@@ -23,4 +23,8 @@ export interface Env {
   LLM_EXTRA_HEADERS?: string;
   /** Optional positive integer seconds; default 60. */
   LLM_TIMEOUT_S?: string;
+  /** Optional USD per 1M prompt tokens for /usage math; default 0.03. */
+  PRICE_IN_PER_M?: string;
+  /** Optional USD per 1M completion tokens for /usage math; default 0.12. */
+  PRICE_OUT_PER_M?: string;
 }

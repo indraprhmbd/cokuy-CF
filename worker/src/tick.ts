@@ -121,7 +121,7 @@ async function enqueueNudges(env: Env, llm: OpenAICompatible, now: Date): Promis
       const u = llm.lastUsage;
       // Cron rows use update_id 0: no Telegram update exists there.
       await recordTurnStat(env.DB, {
-        updateId: 0, kind: "nudge", promptTokens: u.prompt, completionTokens: u.completion,
+        updateId: 0, kind: "nudge", chatId: l.chatId, promptTokens: u.prompt, completionTokens: u.completion,
         totalTokens: u.total, model: llm.modelName, latencyMs: Date.now() - draftStarted, error: "",
       }).catch((e) => log("warn", "tick: record nudge stat failed", { err: String(e) }));
     } catch (err) {

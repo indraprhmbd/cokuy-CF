@@ -3,7 +3,8 @@ import type { Env } from "./env";
 import { claimUpdate, markUpdateProcessed } from "./db";
 import { parseAllowlist, webhookAuthorized } from "./telegram";
 import { handleUpdate } from "./turn";
-import { handleCallback, handleToday } from "./tasks_view";
+import { handleCallback } from "./tasks_view";
+import { handleCommand } from "./commands";
 import { tick } from "./tick";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -136,13 +137,14 @@ app.post("/telegram", async (c) => {
   }
   if (!allowed.has(fromId)) return c.json({ ok: true, update_id: updateId, dropped: true });
 
-  // /today renders the task list directly; it never enters the LLM turn.
-  if (text.trimStart().startsWith("/today")) {
+  // Slash commands render deterministically; they never enter the LLM
+  // turn (except via tool results like get_usage).
+  if (text.trimStart().startsWith("/")) {
     const tlog = (level: "info" | "warn" | "error", msg: string, extra?: object) =>
       console[level](JSON.stringify({ update_id: updateId, chat_id: chatId, msg, ...extra }));
     c.executionCtx.waitUntil(
-      handleToday(env, updateId, chatId, tlog).catch((err) =>
-        console.error(JSON.stringify({ update_id: updateId, msg: "today crashed", err: String(err) })),
+      handleCommand(env, updateId, chatId, text, tlog).catch((err) =>
+        console.error(JSON.stringify({ update_id: updateId, msg: "command crashed", err: String(err) })),
       ),
     );
     return c.json({ ok: true, update_id: updateId });
