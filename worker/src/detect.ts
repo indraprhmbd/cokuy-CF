@@ -11,6 +11,9 @@ export const MAX_LOOP_CONTEXT_CHARS = 1000;
 export const MAX_REMINDER_MINUTES = 43200;
 export const MAX_PROFILE_VALUE_CHARS = 200;
 export const MAX_MEMORY_TEXT_CHARS = 1000;
+export const MAX_TASK_TITLE_CHARS = 200;
+export const MAX_TASK_LABEL_CHARS = 32;
+export const MAX_RRULE_CHARS = 100;
 
 export interface LoopCandidate {
   title: string;
@@ -33,6 +36,15 @@ export interface Detection {
   reminders: ReminderCandidate[];
   profile: ProfileCandidate[];
   memories: string[];
+  tasks: TaskCandidate[];
+}
+
+export interface TaskCandidate {
+  title: string;
+  dueInMinutes: number | null;
+  deadlineInMinutes: number | null;
+  rrule: string | null;
+  label: string | null;
 }
 
 export function detectSystemPrompt(open: OpenLoop[]): string {
@@ -42,7 +54,8 @@ export function detectSystemPrompt(open: OpenLoop[]): string {
     '{"loops":[{"title":"short thread name","context":"one-line detail"}],' +
     '"closeIds":[1],"reminders":[{"text":"what to remind","dueInMinutes":120}],' +
     '"profile":[{"key":"language","value":"Indonesian"}],' +
-    '"memories":["durable fact worth recalling later, not chit-chat"]}\n' +
+    '"memories":["durable fact worth recalling later, not chit-chat"],' +
+    '"tasks":[{"title":"buy milk","dueInMinutes":1440,"deadlineInMinutes":null,"rrule":null,"label":null}]}\n' +
     "Rules: loops = concrete unfinished items (promises, plans, questions awaiting action), " +
     "never chit-chat or already-answered items. closeIds = IDs below clearly resolved this turn. " +
     'reminders = ONLY explicit requests to be reminded ("remind me", "ingatkan", "ingetin", "kasih tau nanti"). ' +
@@ -52,6 +65,11 @@ export function detectSystemPrompt(open: OpenLoop[]): string {
     "stable preferences (key=pref.<topic>, e.g. pref.coffee). Never guess; empty when nothing stated. " +
     "memories = candidate long-term memories (facts, decisions, preferences) worth " +
     "semantic recall later; skip anything already covered by profile or chit-chat. " +
+    "tasks = actionable todos with dates: title always, dueInMinutes relative " +
+    "to now when a date/time is stated (null when none), deadlineInMinutes only " +
+    "for hard cutoffs, rrule for repeats (every day|weekday|week|month or " +
+    "every mon,fri...), label single lowercase word or null. " +
+    "A reminder request (ingetin ...) is BOTH a reminder and a task. " +
     "Empty lists when nothing qualifies.";
   if (open.length > 0) {
     prompt += "\nOpen loops:";
@@ -73,7 +91,7 @@ export const RECORD_STATE_TOOL = {
     parameters: {
       type: "object",
       additionalProperties: false,
-      required: ["loops", "closeIds", "reminders", "profile", "memories"],
+      required: ["loops", "closeIds", "reminders", "profile", "memories", "tasks"],
       properties: {
         loops: {
           type: "array",
@@ -104,6 +122,21 @@ export const RECORD_STATE_TOOL = {
           },
         },
         memories: { type: "array", items: { type: "string" } },
+        tasks: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["title", "dueInMinutes", "deadlineInMinutes", "rrule", "label"],
+            properties: {
+              title: { type: "string" },
+              dueInMinutes: { type: ["integer", "null"] },
+              deadlineInMinutes: { type: ["integer", "null"] },
+              rrule: { type: ["string", "null"] },
+              label: { type: ["string", "null"] },
+            },
+          },
+        },
       },
     },
   },
@@ -152,7 +185,7 @@ function extractPayload(raw: string, toolArgs: string | null): unknown {
 export interface PartialResult {
   det: Detection;
   /** Per-list counts of items dropped (not clamped) by validation. */
-  dropped: { loops: number; closeIds: number; reminders: number; profile: number; memories: number };
+  dropped: { loops: number; closeIds: number; reminders: number; profile: number; memories: number; tasks: number };
 }
 
 function asArray(v: unknown): unknown[] {
@@ -171,7 +204,7 @@ function clampRunes(s: string, max: number): string {
  */
 export function parseDetection(raw: string, open: OpenLoop[], toolArgs: string | null = null): PartialResult {
   const det = extractPayload(raw, toolArgs) as Record<string, unknown>;
-  const dropped = { loops: 0, closeIds: 0, reminders: 0, profile: 0, memories: 0 };
+  const dropped = { loops: 0, closeIds: 0, reminders: 0, profile: 0, memories: 0, tasks: 0 };
   const loops: LoopCandidate[] = [];
   for (const item of asArray(det.loops).slice(0, MAX_DETECT_ITEMS)) {
     const o = (item ?? {}) as Record<string, unknown>;
@@ -225,5 +258,45 @@ export function parseDetection(raw: string, open: OpenLoop[], toolArgs: string |
     }
     memories.push(clampRunes(text, MAX_MEMORY_TEXT_CHARS));
   }
-  return { det: { loops, closeIds, reminders, profile, memories }, dropped };
+  const tasks: TaskCandidate[] = [];
+  for (const item of asArray(det.tasks).slice(0, MAX_DETECT_ITEMS)) {
+    const o = (item ?? {}) as Record<string, unknown>;
+    const title = String(o.title ?? "").trim();
+    if (!title) {
+      dropped.tasks++;
+      continue;
+    }
+    const due = optMinutes(o.dueInMinutes ?? o.due_in_minutes);
+    const deadline = optMinutes(o.deadlineInMinutes ?? o.deadline_in_minutes);
+    if ((o.dueInMinutes ?? o.due_in_minutes) != null && due == null) {
+      dropped.tasks++;
+      continue;
+    }
+    if ((o.deadlineInMinutes ?? o.deadline_in_minutes) != null && deadline == null) {
+      dropped.tasks++;
+      continue;
+    }
+    const rruleRaw = o.rrule == null ? null : String(o.rrule).trim().toLowerCase();
+    const rrule = rruleRaw ? clampRunes(rruleRaw, MAX_RRULE_CHARS) : null;
+    if (rrule && !/^every (day|weekday|week|month|year|[a-z,]+)( at \d{1,2}:\d{2})?$/.test(rrule)) {
+      dropped.tasks++;
+      continue;
+    }
+    const labelRaw = o.label == null ? null : String(o.label).trim().toLowerCase();
+    const label = labelRaw ? clampRunes(labelRaw, MAX_TASK_LABEL_CHARS) : null;
+    if (label && !/^[a-z0-9_]+$/.test(label)) {
+      dropped.tasks++;
+      continue;
+    }
+    tasks.push({ title: clampRunes(title, MAX_TASK_TITLE_CHARS), dueInMinutes: due, deadlineInMinutes: deadline, rrule, label });
+  }
+  return { det: { loops, closeIds, reminders, profile, memories, tasks }, dropped };
+}
+
+/** Optional relative-minutes field: null stays null, numeric strings coerce, out-of-range drops. */
+function optMinutes(v: unknown): number | null {
+  if (v == null) return null;
+  const n = typeof v === "string" && v.trim() !== "" ? Number(v) : v;
+  if (!Number.isInteger(n) || (n as number) < 1 || (n as number) > MAX_REMINDER_MINUTES) return null;
+  return n as number;
 }

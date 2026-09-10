@@ -30,6 +30,8 @@ const QUESTIONS: string[] = [
   "bukan itu maksud gue, yang hangat-hangat",
   "yg praktis sih",
   "sipp, santai aja",
+  "besok pagi beli susu buat sarapan",
+  "/today",
 ];
 
 const SEED_MEMORIES: string[] = [
@@ -122,6 +124,33 @@ async function seedMemories(user: number): Promise<void> {
   console.log("seed done.");
 }
 
+async function sendCallback(
+  url: string,
+  secret: string,
+  user: number,
+  updateId: number,
+  data: string,
+): Promise<void> {
+  const res = await fetch(url + "/telegram", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-telegram-bot-api-secret-token": secret,
+    },
+    body: JSON.stringify({
+      update_id: updateId,
+      callback_query: {
+        id: "qa-" + updateId,
+        from: { id: user },
+        message: { message_id: 1, chat: { id: user }, text: "task row" },
+        data,
+      },
+    }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) throw new Error("callback HTTP " + res.status);
+}
+
 async function sendUpdate(url: string, secret: string, user: number, updateId: number, text: string): Promise<void> {
   const res = await fetch(url + "/telegram", {
     method: "POST",
@@ -183,6 +212,17 @@ async function main(): Promise<void> {
     const uid = base + i;
     console.log(`\n[${i + 1}/${QUESTIONS.length}] Q: ${q}`);
     await sendUpdate(args.url, args.secret, args.user, uid, q);
+    if (q.trimStart().startsWith("/")) {
+      // Commands render outside the turn pipeline (no assistant row to poll);
+      // verify effect directly. /today lists; eyeball delivery on the phone.
+      await sleep(10000);
+      const open = d1(
+        `SELECT COUNT(*) AS n FROM tasks WHERE chat_id = ${args.user} AND status = 'open';`,
+      ) as Array<{ n: number }>;
+      console.log(`  (command; open tasks=${open[0]?.n ?? "?"})`);
+      replies.push("");
+      continue;
+    }
     const reply = await waitReply(afterId, 90000);
     if (!reply) {
       console.log("  (no reply in 90s)");
@@ -233,6 +273,22 @@ async function main(): Promise<void> {
   console.log("\n--- totals ---");
   console.log(`tok_in=${totIn} tok_out=${totOut} embed_in=${totEmb} errors=${errCount}`);
   console.log(`usd=${usd.toFixed(7)} for ${QUESTIONS.length} QnA`);
+
+  // Triage-button probe: done the newest open task via forged callback.
+  const openTasks = d1(
+    `SELECT id, title FROM tasks WHERE chat_id = ${args.user} AND status = 'open' ORDER BY id DESC LIMIT 1;`,
+  ) as Array<{ id: number; title: string }>;
+  if (openTasks.length > 0) {
+    const t = openTasks[0] as { id: number; title: string };
+    const cbUid = base + QUESTIONS.length;
+    console.log(`\n--- callback probe: done:${t.id} (${t.title}) ---`);
+    await sendCallback(args.url, args.secret, args.user, cbUid, `done:${t.id}`);
+    await sleep(8000);
+    const st = d1(`SELECT status FROM tasks WHERE id = ${t.id};`) as Array<{ status: string }>;
+    console.log(`task ${t.id} status=${st[0]?.status ?? "?"}`);
+  } else {
+    console.log("\n--- callback probe skipped: no open tasks ---");
+  }
 }
 
 main().catch((e) => {

@@ -539,3 +539,117 @@ export async function recordFactHistory(
     .bind(factTable, factId, oldValue, newValue, sourceUpdateId)
     .run();
 }
+
+export interface TaskRow {
+  id: number;
+  title: string;
+  dueAt: string | null;
+  deadlineAt: string | null;
+  rrule: string | null;
+  status: string;
+  label: string | null;
+}
+
+export interface NewTask {
+  title: string;
+  dueAt: string | null;
+  deadlineAt: string | null;
+  rrule: string | null;
+  label: string | null;
+}
+
+/** Creates one task; returns its id. No title dedupe: duplicates are distinct tasks. */
+export async function createTask(db: D1Database, chatId: number, t: NewTask): Promise<number> {
+  const res = await db
+    .prepare(
+      "INSERT INTO tasks(chat_id, title, due_at, deadline_at, rrule, label) VALUES (?,?,?,?,?,?)",
+    )
+    .bind(chatId, t.title, t.dueAt, t.deadlineAt, t.rrule, t.label)
+    .run();
+  if (res.meta.last_row_id == null) throw new Error("create task: missing row id");
+  return res.meta.last_row_id;
+}
+
+/** Open tasks due on or before dayEnd (inclusive), oldest due first. */
+export async function tasksDueThrough(
+  db: D1Database,
+  chatId: number,
+  dayEnd: string,
+  limit: number,
+): Promise<TaskRow[]> {
+  const res = await db
+    .prepare(
+      `SELECT id, title, due_at AS dueAt, deadline_at AS deadlineAt, rrule, status, label
+       FROM tasks WHERE chat_id = ? AND status = 'open' AND due_at IS NOT NULL AND due_at <= ?
+       ORDER BY due_at ASC LIMIT ?`,
+    )
+    .bind(chatId, dayEnd, limit)
+    .all<TaskRow>();
+  return res.results;
+}
+
+/** Open tasks with no due date (inbox). */
+export async function tasksInbox(db: D1Database, chatId: number, limit: number): Promise<TaskRow[]> {
+  const res = await db
+    .prepare(
+      `SELECT id, title, due_at AS dueAt, deadline_at AS deadlineAt, rrule, status, label
+       FROM tasks WHERE chat_id = ? AND status = 'open' AND due_at IS NULL
+       ORDER BY id ASC LIMIT ?`,
+    )
+    .bind(chatId, limit)
+    .all<TaskRow>();
+  return res.results;
+}
+
+/** Chat-scoped mark-done. Returns true when a row moved. */
+export async function completeTask(db: D1Database, id: number, chatId: number): Promise<boolean> {
+  const res = await db
+    .prepare(
+      "UPDATE tasks SET status = 'done', done_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ? AND chat_id = ? AND status = 'open'",
+    )
+    .bind(id, chatId)
+    .run();
+  return (res.meta.changes ?? 0) === 1;
+}
+
+/** Chat-scoped due-date push by whole days. Returns true when a row moved. */
+export async function snoozeTask(db: D1Database, id: number, chatId: number, days: number): Promise<boolean> {
+  const res = await db
+    .prepare(
+      "UPDATE tasks SET due_at = strftime('%Y-%m-%dT%H:%M:%SZ', due_at, ?) WHERE id = ? AND chat_id = ? AND status = 'open' AND due_at IS NOT NULL",
+    )
+    .bind(`+${days} days`, id, chatId)
+    .run();
+  return (res.meta.changes ?? 0) === 1;
+}
+
+export interface ChatPrefs {
+  quietStart: number;
+  quietEnd: number;
+  briefTime: string;
+}
+
+/** Chat-scoped task lookup. Null when missing or other chat's. */
+export async function getTask(db: D1Database, id: number, chatId: number): Promise<TaskRow | null> {
+  const row = await db
+    .prepare(
+      `SELECT id, title, due_at AS dueAt, deadline_at AS deadlineAt, rrule, status, label
+       FROM tasks WHERE id = ? AND chat_id = ?`,
+    )
+    .bind(id, chatId)
+    .first<TaskRow>();
+  return row ?? null;
+}
+
+/** Prefs with defaults when no row exists yet. */
+export async function getPrefs(db: D1Database, chatId: number): Promise<ChatPrefs> {
+  const row = await db
+    .prepare("SELECT quiet_start AS quietStart, quiet_end AS quietEnd, brief_time AS briefTime FROM prefs WHERE chat_id = ?")
+    .bind(chatId)
+    .first<{ quietStart: number; quietEnd: number; briefTime: string }>();
+  return {
+    quietStart: row?.quietStart ?? 22,
+    quietEnd: row?.quietEnd ?? 7,
+    briefTime: row?.briefTime ?? "07:00",
+  };
+}

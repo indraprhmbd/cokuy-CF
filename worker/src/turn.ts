@@ -14,6 +14,7 @@ import {
   claimUpdate,
   closeLoop,
   createReminder,
+  createTask,
   getConversationSummary,
   getOrCreateConversation,
   getProfileFacts,
@@ -55,7 +56,7 @@ const WIB_OFFSET_MS = 7 * 3600 * 1000;
 /** Router pre-gate for the detector: explicit reminder verbs, durable-fact
  * phrases, or task words force a run. Chit-chat without open loops skips it. */
 const DETECT_TRIGGER_RE =
-  /inget|ingatkan|remind|kasih tau|jangan lupa|namaku|nama (saya|gue|aku)|suka |sukanya|prefer|bahasanya|todo|tugas|janji|deadline|utang/i;
+  /inget|ingatkan|remind|kasih tau|jangan lupa|namaku|nama (saya|gue|aku)|suka |sukanya|prefer|bahasanya|todo|tugas|janji|deadline|utang|besok|lusa|beli |bayar |kerjain|minggu|sabtu|senin|selasa|rabu|kamis|jumat/i;
 
 /** 0013 recall: semantic memory retrieval over stored memories. */
 const RECALL_THRESHOLD = 0.72;
@@ -524,6 +525,14 @@ async function detectAndApply(
       log("warn", "detect: save profile fact failed", { key: p.key, err: String(err) }),
     );
   }
+  for (const t of det.tasks) {
+    // Real UTC clock like reminders: relative minutes from now.
+    const dueAt = t.dueInMinutes == null ? null : new Date(Date.now() + t.dueInMinutes * 60000).toISOString();
+    const deadlineAt = t.deadlineInMinutes == null ? null : new Date(Date.now() + t.deadlineInMinutes * 60000).toISOString();
+    await createTask(env.DB, chatId, {
+      title: t.title, dueAt, deadlineAt, rrule: t.rrule, label: t.label,
+    }).catch((err) => log("warn", "detect: create task failed", { err: String(err) }));
+  }
   // Safety-net memory saves: embed + persist detector candidates the
   // mid-turn tools did not already handle. Failures only log.
   if (det.memories.length > 0) {
@@ -561,7 +570,7 @@ async function detectAndApply(
   }
   log("info", "detect: applied", {
     loops: det.loops.length, closed: det.closeIds.length, reminders: det.reminders.length,
-    profile: det.profile.length, memories: det.memories.length,
+    profile: det.profile.length, memories: det.memories.length, tasks: det.tasks.length,
   });
 }
 

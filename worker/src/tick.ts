@@ -14,6 +14,7 @@ import {
   dueLoops,
   dueReminders,
   enqueueOutbox,
+  getPrefs,
   markOutboxSent,
   markReminderSent,
   pendingOutbox,
@@ -47,8 +48,8 @@ function wibDayStartUtc(now: Date): string {
   return new Date(`${date}T00:00:00+07:00`).toISOString();
 }
 
-function inQuietHours(wibHour: number): boolean {
-  return wibHour >= QUIET_START_HOUR || wibHour < QUIET_END_HOUR;
+function inQuietHours(wibHour: number, start: number, end: number): boolean {
+  return wibHour >= start || wibHour < end;
 }
 
 function buildLlm(env: Env): OpenAICompatible | null {
@@ -156,13 +157,24 @@ async function drainOutbox(env: Env, sender: Sender, now: Date): Promise<void> {
       continue;
     }
     if (!claimed) continue;
+    // Prefs-loaded quiet hours (0015): per-chat window, defaults 22-07.
+    // Prefs read failure falls back to built-in constants, never blocks.
+    let qs = QUIET_START_HOUR;
+    let qe = QUIET_END_HOUR;
+    try {
+      const p = await getPrefs(env.DB, m.chatId);
+      qs = p.quietStart;
+      qe = p.quietEnd;
+    } catch (err) {
+      log("warn", "tick: prefs load failed, defaults apply", { err: String(err) });
+    }
     const release = async (reason: string) => {
       log("info", "tick: send deferred", { outbox_id: m.id, reason });
       await releaseOutboxClaim(env.DB, m.id).catch((err) =>
         log("warn", "tick: release claim failed", { outbox_id: m.id, err: String(err) }),
       );
     };
-    if (inQuietHours(hour)) {
+    if (inQuietHours(hour, qs, qe)) {
       await release("quiet hours");
       continue;
     }

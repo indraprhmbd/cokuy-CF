@@ -16,6 +16,31 @@ export function webhookAuthorized(req: Request, secret: string | undefined): boo
 export interface Sender {
   sendReply(chatId: number, text: string): Promise<void>;
   sendTyping(chatId: number): Promise<void>;
+  sendWithKeyboard(chatId: number, text: string, keyboard: InlineKeyboard): Promise<number>;
+  answerCallback(callbackId: string, text?: string): Promise<void>;
+  editTaskMessage(chatId: number, messageId: number, text: string, keyboard: InlineKeyboard | null): Promise<void>;
+}
+
+export interface InlineButton {
+  text: string;
+  callback_data: string;
+}
+
+export interface InlineKeyboard {
+  inline_keyboard: InlineButton[][];
+}
+
+/** Done / +1d / +3d triage row. Callback data stays under the 64-byte cap. */
+export function taskKeyboard(taskId: number): InlineKeyboard {
+  return {
+    inline_keyboard: [
+      [
+        { text: "Beres", callback_data: `done:${taskId}` },
+        { text: "+1d", callback_data: `snz1:${taskId}` },
+        { text: "+3d", callback_data: `snz3:${taskId}` },
+      ],
+    ],
+  };
 }
 
 /**
@@ -57,6 +82,23 @@ export function createSender(env: Env): Sender | null {
     },
     async sendTyping(chatId: number): Promise<void> {
       await bot.api.sendChatAction(chatId, "typing");
+    },
+    async sendWithKeyboard(chatId: number, text: string, keyboard: InlineKeyboard): Promise<number> {
+      const msg = await bot.api.sendMessage(chatId, text, { reply_markup: keyboard });
+      return msg.message_id;
+    },
+    async answerCallback(callbackId: string, text?: string): Promise<void> {
+      await bot.api.answerCallbackQuery(callbackId, text ? { text } : undefined);
+    },
+    async editTaskMessage(
+      chatId: number,
+      messageId: number,
+      text: string,
+      keyboard: InlineKeyboard | null,
+    ): Promise<void> {
+      await bot.api.editMessageText(chatId, messageId, text, {
+        ...(keyboard ? { reply_markup: keyboard } : {}),
+      });
     },
   };
 }
