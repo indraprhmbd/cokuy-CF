@@ -63,11 +63,20 @@ export async function usageReport(env: Env, chatId: number): Promise<UsageReport
   const fmtUsd = (v: number) => `$${v.toFixed(7).replace(/0+$/, "").replace(/\.$/, ".0")}`;
   const today = sum(await usageSums(env.DB, chatId, todayStart));
   const week = sum(await usageSums(env.DB, chatId, weekStart));
+  // Pre-0013 rows carry chat_id=0 (ledger went per-chat later). Shown as a
+  // labeled legacy line, never silently merged into anyone's totals.
+  const legacy = sum(await usageSums(env.DB, 0, weekStart));
+  const lines = [
+    `Hari ini: ${today.t} panggilan, ${today.p} in / ${today.c} out token, ${fmtUsd(usd(today.p, today.c))}${today.e > 0 ? `, ${today.e} gagal` : ""}.`,
+    `7 hari: ${week.t} panggilan, ${week.p} in / ${week.c} out token, ${fmtUsd(usd(week.p, week.c))}${week.e > 0 ? `, ${week.e} gagal` : ""}.`,
+  ];
+  if (legacy.t > 0) {
+    lines.push(
+      `Riwayat lama (sebelum hitung per-chat): ${legacy.p} in / ${legacy.c} out token, ${fmtUsd(usd(legacy.p, legacy.c))}.`,
+    );
+  }
   return {
-    lines: [
-      `Hari ini: ${today.t} panggilan, ${today.p} in / ${today.c} out token, ${fmtUsd(usd(today.p, today.c))}${today.e > 0 ? `, ${today.e} gagal` : ""}.`,
-      `7 hari: ${week.t} panggilan, ${week.p} in / ${week.c} out token, ${fmtUsd(usd(week.p, week.c))}${week.e > 0 ? `, ${week.e} gagal` : ""}.`,
-    ],
+    lines,
     prompt: week.p,
     completion: week.c,
     usd: usd(week.p, week.c),
