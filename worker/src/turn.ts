@@ -383,8 +383,15 @@ async function recallMemories(
     .filter((x) => x.s >= RECALL_THRESHOLD)
     .sort((a, b) => b.s - a.s)
     .slice(0, RECALL_TOP_K);
+  const recallMs = Date.now() - started;
+  const recordRecall = (error: string) =>
+    recordTurnStat(env.DB, {
+      updateId, kind: "recall", promptTokens, completionTokens: 0,
+      totalTokens: promptTokens, model, latencyMs: recallMs, error,
+    }).catch((err) => log("warn", "recall: stat failed", { err: String(err) }));
   if (scored.length === 0) {
     log("info", "recall: no hit", { scanned: rows.length });
+    await recordRecall("");
     return "";
   }
   // Budget newest-first? No: score order carries relevance; clamp lines.
@@ -400,10 +407,7 @@ async function recallMemories(
   await touchMemories(env.DB, ids).catch((err) =>
     log("warn", "recall: touch failed", { err: String(err) }),
   );
-  await recordTurnStat(env.DB, {
-    updateId, kind: "recall", promptTokens, completionTokens: 0,
-    totalTokens: promptTokens, model, latencyMs: Date.now() - started, error: "",
-  }).catch((err) => log("warn", "recall: stat failed", { err: String(err) }));
+  await recordRecall("");
   log("info", "recall: hit", {
     kept: kept.length, scanned: rows.length, top: kept[0].s.toFixed(3),
   });
