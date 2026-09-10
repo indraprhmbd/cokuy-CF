@@ -61,6 +61,7 @@ export class OpenAICompatible {
     history: Array<{ role: string; text: string }>,
     profileBlock?: string,
     summaryBlock?: string,
+    memoryBlock?: string,
   ): Promise<string> {
     let system =
       "You are Cokuy, the mediocre guy in the friend circle: casual, calm, kind, " +
@@ -83,6 +84,7 @@ export class OpenAICompatible {
       `Today is ${wibToday(new Date())} (WIB).`;
     if (profileBlock?.trim()) system += ` ${profileBlock.trim()}`;
     if (summaryBlock?.trim()) system += ` ${summaryBlock.trim()}`;
+    if (memoryBlock?.trim()) system += ` ${memoryBlock.trim()}`;
     const messages: LlmMessage[] = [{ role: "system", text: system }];
     for (const m of history) {
       const text = m.text.trim();

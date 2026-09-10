@@ -18,16 +18,19 @@ import {
   getOrCreateConversation,
   getProfileFacts,
   markUpdateProcessed,
+  memoriesForChat,
   messagesChunk,
   openLoopOrExisting,
   openLoops,
   recentMessagesAfter,
   recordFeedback,
   recordTurnStat,
+  touchMemories,
   unsummarizedSpan,
   upsertConversationSummary,
   upsertProfileFact,
 } from "./db";
+import { cosine, embedTexts } from "./embed";
 import { detectSystemPrompt as buildDetectPrompt, parseDetection, RECORD_STATE_TOOL } from "./detect";
 import { sanitizeReply } from "./sanitize";
 
@@ -50,6 +53,14 @@ const WIB_OFFSET_MS = 7 * 3600 * 1000;
  * phrases, or task words force a run. Chit-chat without open loops skips it. */
 const DETECT_TRIGGER_RE =
   /inget|ingatkan|remind|kasih tau|jangan lupa|namaku|nama (saya|gue|aku)|suka |sukanya|prefer|bahasanya|todo|tugas|janji|deadline|utang/i;
+
+/** 0013 recall: semantic memory retrieval over stored memories. */
+const RECALL_THRESHOLD = 0.72;
+const RECALL_TOP_K = 5;
+const RECALL_BUDGET_CHARS = 1500;
+/** Below this length the turn is pure ack; embedding it wastes a call. */
+const RECALL_SKIP_RUNES = 6;
+const RECALL_MAX_ROWS = 2000;
 
 function truncate(s: string, max: number): string {
   const runes = [...s];
@@ -189,6 +200,13 @@ export async function handleUpdate(
     ? "Earlier conversation (summarized, oldest first): " + priorSummary
     : "";
 
+  // 0013 recall: semantic memories for this query. Router-gated, never
+  // blocking: embed failure means zero memories, never a failed turn.
+  let memoryBlock = "";
+  if ([...text].length > RECALL_SKIP_RUNES) {
+    memoryBlock = await recallMemories(env, updateId, chatId, text, log);
+  }
+
   const started = Date.now();
   sender.sendTyping(chatId).catch((err) => log("warn", "typing indicator failed", { err: String(err) }));
   const typer = setInterval(() => {
@@ -196,7 +214,7 @@ export async function handleUpdate(
   }, TYPING_INTERVAL_MS);
   let reply: string;
   try {
-    reply = await llm.generate(history, profileBlock, summaryBlock);
+    reply = await llm.generate(history, profileBlock, summaryBlock, memoryBlock);
   } catch (err) {
     clearInterval(typer);
     const latencyMs = Date.now() - started;
@@ -312,6 +330,87 @@ async function recordFeedSignals(
     return;
   }
   log("info", "feedback signal", { correction: isCorrection, rephrase: isRephrase });
+}
+
+/**
+ * 0013 semantic recall. Embeds the query, cosine-scores same-chat
+ * memories, injects top-k above threshold inside a char budget with
+ * memory IDs for use-tracking. Any failure (config, embed, D1) returns
+ * "" so the turn proceeds memoryless. Records a "recall" ledger row.
+ */
+async function recallMemories(
+  env: Env,
+  updateId: number,
+  chatId: number,
+  text: string,
+  log: (level: "info" | "warn" | "error", msg: string, extra?: object) => void,
+): Promise<string> {
+  const baseURL = env.LLM_BASE_URL;
+  const apiKey = env.LLM_API_KEY;
+  const model = env.LLM_EMBED_MODEL;
+  if (!baseURL || !apiKey || !model) return "";
+  let extra: Record<string, string> = {};
+  if (env.LLM_EXTRA_HEADERS?.trim()) {
+    try {
+      extra = JSON.parse(env.LLM_EXTRA_HEADERS) as Record<string, string>;
+    } catch {
+      return "";
+    }
+  }
+  const started = Date.now();
+  let query: number[];
+  let dims = 0;
+  let promptTokens = 0;
+  try {
+    const r = await embedTexts(baseURL, apiKey, model, [text], extra);
+    query = r.vectors[0];
+    dims = r.dims;
+    promptTokens = r.usage.prompt;
+  } catch (err) {
+    log("warn", "recall: embed failed", { err: String(err) });
+    return "";
+  }
+  log("info", "recall: embedded", { dims, latency_ms: Date.now() - started });
+  let rows;
+  try {
+    rows = await memoriesForChat(env.DB, chatId, RECALL_MAX_ROWS);
+  } catch (err) {
+    log("warn", "recall: load memories failed", { err: String(err) });
+    return "";
+  }
+  const scored = rows
+    .map((m) => ({ m, s: cosine(query, m.embedding) }))
+    .filter((x) => x.s >= RECALL_THRESHOLD)
+    .sort((a, b) => b.s - a.s)
+    .slice(0, RECALL_TOP_K);
+  if (scored.length === 0) {
+    log("info", "recall: no hit", { scanned: rows.length });
+    return "";
+  }
+  // Budget newest-first? No: score order carries relevance; clamp lines.
+  let total = 0;
+  const kept: typeof scored = [];
+  for (const x of scored) {
+    const len = [...x.m.text].length;
+    if (total + len > RECALL_BUDGET_CHARS && kept.length > 0) break;
+    total += len;
+    kept.push(x);
+  }
+  const ids = kept.map((x) => x.m.id);
+  await touchMemories(env.DB, ids).catch((err) =>
+    log("warn", "recall: touch failed", { err: String(err) }),
+  );
+  await recordTurnStat(env.DB, {
+    updateId, kind: "recall", promptTokens, completionTokens: 0,
+    totalTokens: promptTokens, model, latencyMs: Date.now() - started, error: "",
+  }).catch((err) => log("warn", "recall: stat failed", { err: String(err) }));
+  log("info", "recall: hit", {
+    kept: kept.length, scanned: rows.length, top: kept[0].s.toFixed(3),
+  });
+  return (
+    "Relevant past memories ([mID] = memory id, most relevant first): " +
+    kept.map((x) => `[m${x.m.id}] ${truncate(x.m.text.trim(), 400)}`).join(" | ")
+  );
 }
 
 async function detectAndApply(

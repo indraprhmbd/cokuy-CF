@@ -451,3 +451,76 @@ export async function recordFeedback(
     .bind(updateId, isCorrection ? 1 : 0, isRephrase ? 1 : 0)
     .run();
 }
+
+export interface StoredMemory {
+  id: number;
+  text: string;
+  embedding: number[];
+}
+
+/** Saves one memory; returns its id. Embedding stored as JSON float array. */
+export async function saveMemory(
+  db: D1Database,
+  chatId: number,
+  text: string,
+  embedding: number[],
+): Promise<number> {
+  const res = await db
+    .prepare("INSERT INTO memories(chat_id, text, embedding) VALUES (?,?,?)")
+    .bind(chatId, text, JSON.stringify(embedding))
+    .run();
+  if (res.meta.last_row_id == null) throw new Error("save memory: missing row id");
+  return res.meta.last_row_id;
+}
+
+/** All memories for a chat, oldest first. Rows with corrupt embeddings are skipped. */
+export async function memoriesForChat(
+  db: D1Database,
+  chatId: number,
+  limit: number,
+): Promise<StoredMemory[]> {
+  const res = await db
+    .prepare("SELECT id, text, embedding FROM memories WHERE chat_id = ? ORDER BY id ASC LIMIT ?")
+    .bind(chatId, limit)
+    .all<{ id: number; text: string; embedding: string }>();
+  const out: StoredMemory[] = [];
+  for (const r of res.results) {
+    try {
+      const v = JSON.parse(r.embedding) as unknown;
+      if (!Array.isArray(v) || v.length === 0) continue;
+      out.push({ id: r.id, text: r.text, embedding: v as number[] });
+    } catch {
+      continue;
+    }
+  }
+  return out;
+}
+
+/** Marks memories as used (recency signal for consolidation). */
+export async function touchMemories(db: D1Database, ids: number[]): Promise<void> {
+  for (const id of ids) {
+    await db
+      .prepare(
+        "UPDATE memories SET last_used = strftime('%Y-%m-%dT%H:%M:%fZ','now'), use_count = use_count + 1 WHERE id = ?",
+      )
+      .bind(id)
+      .run();
+  }
+}
+
+/** Audit trail for fact/memory mutations: who changed what, from which turn. */
+export async function recordFactHistory(
+  db: D1Database,
+  factTable: string,
+  factId: number,
+  oldValue: string | null,
+  newValue: string | null,
+  sourceUpdateId: number,
+): Promise<void> {
+  await db
+    .prepare(
+      "INSERT INTO fact_history(fact_table, fact_id, old_value, new_value, source_update_id) VALUES (?,?,?,?,?)",
+    )
+    .bind(factTable, factId, oldValue, newValue, sourceUpdateId)
+    .run();
+}
