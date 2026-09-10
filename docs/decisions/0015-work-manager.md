@@ -62,6 +62,11 @@ CREATE TABLE prefs(
 
 - Webhook accepts `callback_query` updates (in addition to `message`).
   Same allowlist + secret gate; strangers silently dropped.
+  Ops trap (hit live 2026-09-10): webhook `allowed_updates` was
+  `["message"]` from the GO-poller era, so presses never arrived —
+  buttons rendered, spinner hung, zero worker logs. Any future
+  setWebhook MUST pass `allowed_updates=["message","callback_query"]`
+  AND re-pass the current `secret_token` (omitting it wipes auth).
 - Callback data budget 64 bytes: `done:<taskId>`,
   `snz1:<taskId>` (+1d), `snz3:<taskId>` (+3d). Numeric IDs only.
 - Every callback answered via `answerCallbackQuery` (clients hang
