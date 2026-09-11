@@ -78,12 +78,13 @@ export function createSender(env: Env): Sender | null {
   }
   const bot = new Bot(env.BOT_TOKEN, options);
   /**
-   * Human-like fragmentation: long multi-paragraph replies send as up to 3
-   * balanced bubbles; short or single-paragraph replies always stay one.
-   * Split points are the model's own blank lines; paragraphs distribute
-   * greedily so no bubble becomes the overflow dump. A tiny tail (<40 chars)
-   * merges into the previous bubble so a lone "wkwk" never travels alone.
-   * Pure function: unit-testable, no I/O.
+   * Human-like fragmentation, content-aware. Short or single-paragraph
+   * replies always stay one bubble. Longer replies split on the model's own
+   * blank lines, but fenced code blocks and lists are atomic units: a code
+   * fence never tears mid-block and a list never orphans one item. Units
+   * then partition greedily into balanced bubbles (~500 chars each, no count
+   * cap). A tiny tail (<40 chars) merges into the previous bubble. Pure,
+   * no I/O.
    */
   function splitReply(text: string): string[] {
     const paras = text
@@ -91,18 +92,54 @@ export function createSender(env: Env): Sender | null {
       .map((p) => p.trim())
       .filter((p) => p.length > 0);
     if (paras.length < 2 || [...text].length < 120) return [text];
-    const sizes = paras.map((p) => [...p].length);
+    // Pass 1: atomic units. Fence tracking spans paragraphs so a fence with
+    // blank lines inside still merges whole; consecutive list items group.
+    const units: string[] = [];
+    let pending = "";
+    let inFence = false;
+    const flush = () => {
+      if (pending) units.push(pending);
+      pending = "";
+    };
+    const isList = (p: string) => /^(?:[-*•]|\d+[.)])\s+\S/m.test(p);
+    for (const p of paras) {
+      const fences = (p.match(/```/g) ?? []).length;
+      if (inFence) {
+        pending += "\n\n" + p;
+        if (fences % 2 === 1) {
+          inFence = false;
+          flush();
+        }
+        continue;
+      }
+      if (fences % 2 === 1) {
+        flush();
+        pending = p;
+        inFence = true;
+        continue;
+      }
+      if (isList(p) && pending && isList(pending)) {
+        pending += "\n" + p;
+        continue;
+      }
+      flush();
+      pending = p;
+    }
+    flush();
+    // Pass 2: balanced greedy partition over units.
+    const sizes = units.map((u) => [...u].length);
     const total = sizes.reduce((a, b) => a + b, 0);
-    const target = total / Math.min(3, paras.length);
+    const maxBubbles = Math.max(1, Math.ceil(total / 500));
+    const target = total / maxBubbles;
     const parts: string[][] = [[]];
     let run = 0;
-    for (const [i, p] of paras.entries()) {
-      const last = parts.length === Math.min(3, paras.length);
+    for (const [i, u] of units.entries()) {
+      const last = parts.length === maxBubbles;
       if (!last && run > 0 && run + sizes[i] / 2 > target) {
         parts.push([]);
         run = 0;
       }
-      parts[parts.length - 1].push(p);
+      parts[parts.length - 1].push(u);
       run += sizes[i];
     }
     const out = parts.map((g) => g.join("\n\n"));
