@@ -61,6 +61,32 @@ const WIB_OFFSET_MS = 7 * 3600 * 1000;
 const DETECT_TRIGGER_RE =
   /inget|ingatkan|remind|kasih tau|jangan lupa|namaku|nama (saya|gue|aku)|suka |sukanya|prefer|bahasanya|todo|tugas|janji|deadline|utang|besok|lusa|beli |bayar |kerjain|minggu|sabtu|senin|selasa|rabu|kamis|jumat/i;
 
+/**
+ * Explicit-reminder fallback: "ingetin <teks> <N> menit/jam/detik lagi" or
+ * the time-first twin "ingetin <N> menit lagi <teks>". Model-independent;
+ * caps at the same 30-day bound as detector reminders. Null when the text
+ * is not an explicit relative-time request.
+ */
+function explicitReminderFallback(userText: string): { text: string; dueInMinutes: number } | null {
+  const toMinutes = (n: number, unit: string): number | null => {
+    if (!Number.isInteger(n) || n < 1) return null;
+    const u = unit.toLowerCase();
+    const minutes = u === "jam" ? n * 60 : u === "detik" ? Math.max(1, Math.ceil(n / 60)) : n;
+    return minutes > 43200 ? null : minutes;
+  };
+  const textFirst = userText.match(/inget(?:in|kan)?\s+(.+?)\s+(\d+)\s*(detik|menit|jam)\s*(?:lagi)?/i);
+  if (textFirst && textFirst[1].trim()) {
+    const minutes = toMinutes(Number(textFirst[2]), textFirst[3]);
+    if (minutes != null) return { text: textFirst[1].trim(), dueInMinutes: minutes };
+  }
+  const timeFirst = userText.match(/inget(?:in|kan)?\s+(\d+)\s*(detik|menit|jam)\s*(?:lagi)?\s*(.+)/i);
+  if (timeFirst && timeFirst[3].trim()) {
+    const minutes = toMinutes(Number(timeFirst[1]), timeFirst[2]);
+    if (minutes != null) return { text: timeFirst[3].trim(), dueInMinutes: minutes };
+  }
+  return null;
+}
+
 /** 0013 recall: semantic memory retrieval over stored memories. */
 const RECALL_THRESHOLD = 0.72;
 const RECALL_TOP_K = 5;
@@ -652,6 +678,23 @@ async function detectAndApply(
     await createReminder(env.DB, chatId, r.text, due).catch((err) =>
       log("warn", "detect: create reminder failed", { err: String(err) }),
     );
+  }
+  // Deterministic safety net: an explicit "ingetin X menit/jam lagi" must
+  // never depend on model obedience. The assistant denial above proved the
+  // extractor can return empty while staring at a textbook request, so when
+  // the model yields nothing, the regex path creates it directly.
+  if (det.reminders.length === 0) {
+    const fallback = explicitReminderFallback(userText);
+    if (fallback) {
+      const due = new Date(Date.now() + fallback.dueInMinutes * 60000);
+      due.setSeconds(0, 0);
+      await createReminder(env.DB, chatId, fallback.text, due).catch((err) =>
+        log("warn", "detect: fallback reminder failed", { err: String(err) }),
+      );
+      log("info", "detect: fallback reminder created", {
+        text: fallback.text, due_in_minutes: fallback.dueInMinutes,
+      });
+    }
   }
   for (const p of det.profile) {
     await upsertProfileFact(env.DB, chatId, p.key, p.value).catch((err) =>

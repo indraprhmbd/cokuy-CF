@@ -70,6 +70,8 @@ export function detectSystemPrompt(open: OpenLoop[]): string {
     "for hard cutoffs, rrule for repeats (every day|weekday|week|month or " +
     "every mon,fri...), label single lowercase word or null. " +
     "A reminder request (ingetin ...) is BOTH a reminder and a task. " +
+    "Base extraction on the USER text: an assistant reply denying abilities " +
+    "(cannot remind, no tools) is itself an error, never a reason to skip. " +
     "Empty lists when nothing qualifies.";
   if (open.length > 0) {
     prompt += "\nOpen loops:";
