@@ -78,11 +78,27 @@ export function createSender(env: Env): Sender | null {
   }
   const bot = new Bot(env.BOT_TOKEN, options);
   /**
-   * Sends text as HTML when it carries model Markdown, else plain. HTML
-   * failures (bad entities from odd model output) fall back to plain text
-   * so a formatting edge never eats the reply. Plain-text sends keep the
-   * old throw-on-failure contract.
+   * Human-like fragmentation: long multi-paragraph replies send as up to 3
+   * bubbles; short or single-paragraph replies always stay one. Split points
+   * are the model's own blank lines. A tiny tail (<40 chars) merges into the
+   * previous bubble so a lone "wkwk" never travels alone. Overflow paragraphs
+   * merge into the last bubble. Pure function: unit-testable, no I/O.
    */
+  function splitReply(text: string): string[] {
+    const paras = text
+      .split(/\n\s*\n/)
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0);
+    if (paras.length < 2 || [...text].length < 120) return [text];
+    const parts = paras.slice(0, 3);
+    if (paras.length > 3) parts[2] = [...parts.slice(2), ...paras.slice(3)].join("\n\n");
+    const tail = parts[parts.length - 1];
+    if (parts.length > 1 && [...tail].length < 40) {
+      parts[parts.length - 2] = parts[parts.length - 2] + "\n" + tail;
+      parts.pop();
+    }
+    return parts;
+  }
   async function sendText(
     chatId: number,
     text: string,
@@ -99,8 +115,34 @@ export function createSender(env: Env): Sender | null {
     }
   }
   return {
+    /**
+     * Conversational replies fragment into up to 3 bubbles. Each bubble
+     * sends independently: a failed middle bubble logs and continues, so a
+     * formatting edge degrades to a shorter reply, never a lost one. Throws
+     * only when every bubble failed (preserves the old total-failure
+     * contract for callers).
+     */
     async sendReply(chatId: number, text: string): Promise<void> {
-      await sendText(chatId, text);
+      const parts = splitReply(text);
+      let failures = 0;
+      for (const [i, part] of parts.entries()) {
+        try {
+          await sendText(chatId, part);
+        } catch (err) {
+          failures++;
+          console.warn(
+            JSON.stringify({
+              msg: "sendReply: bubble failed, continuing",
+              chat_id: chatId,
+              bubble: `${i + 1}/${parts.length}`,
+              err: String(err),
+            }),
+          );
+        }
+      }
+      if (failures === parts.length) {
+        throw new Error(`sendReply: all ${parts.length} bubbles failed`);
+      }
     },
     async sendTyping(chatId: number): Promise<void> {
       await bot.api.sendChatAction(chatId, "typing");
