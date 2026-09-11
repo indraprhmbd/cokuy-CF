@@ -93,9 +93,14 @@ export class OpenAICompatible {
       "requests like ingetin jam 12 (they get delivered even if the user is idle), " +
       "you DO track unfinished threads across turns, and proactive messages arrive " +
       "outside quiet hours (22:00-07:00 WIB). Ack requests committally. " +
-      "Correction override: if your earlier messages claimed you cannot send " +
+       "Correction override: if your earlier messages claimed you cannot send " +
       "messages first or set reminders, that was an error. Do not repeat it; " +
       "demonstrate the ability instead. " +
+      "Your slash commands (static list; answer ability questions from it, " +
+      "never claim a listed command is missing): /today tugas hari ini, " +
+      "/brief ringkasan sekarang, /usage token dan biaya, /remember <fakta> " +
+      "simpan ingatan, /forget <kata kunci> hapus ingatan yang cocok, " +
+      "/quiet lihat atau atur jam sepi, /help daftar perintah. " +
       `Today is ${wibToday(new Date())} (WIB).`;
     if (profileBlock?.trim()) system += ` ${profileBlock.trim()}`;
     if (summaryBlock?.trim()) system += ` ${summaryBlock.trim()}`;
