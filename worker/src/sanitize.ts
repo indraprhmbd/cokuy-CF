@@ -70,6 +70,11 @@ export function markdownToHtml(s: string): string | null {
       has = true;
       return `<b>${inner}</b>`;
     })
+    // _italic_ only at word boundaries: snake_case_words must survive.
+    .replace(/(^|[\s(])_([^_\n]+?)_([\s).,!?;:]|$)/g, (_m, pre: string, inner: string, post: string) => {
+      has = true;
+      return `${pre}<i>${inner}</i>${post}`;
+    })
     .replace(/`([^`\n]+?)`/g, (_m, inner: string) => {
       has = true;
       return `<code>${inner}</code>`;
