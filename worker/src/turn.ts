@@ -42,7 +42,7 @@ import { detectSystemPrompt as buildDetectPrompt, parseDetection, RECORD_STATE_T
 import { sanitizeReply } from "./sanitize";
 
 const HISTORY_FETCH_LIMIT = 40;
-const HISTORY_BUDGET_CHARS = 10000;
+const HISTORY_BUDGET_CHARS = 6000;
 /** Rolling summary: compact once unsummarized rows pass this count. */
 const SUMMARIZE_THRESHOLD = 60;
 /** Messages left untouched above the new watermark after compaction. */
