@@ -283,6 +283,7 @@ export async function deleteMemoriesByKeyword(
     .all<{ id: number; text: string }>();
   for (const r of rows.results) {
     await db.prepare("DELETE FROM memories WHERE id = ?").bind(r.id).run();
+    await db.prepare("DELETE FROM memories_fts WHERE id = ?").bind(r.id).run();
   }
   return rows.results.map((r) => r.text);
 }
@@ -558,6 +559,10 @@ export async function saveMemory(
     .bind(chatId, text, JSON.stringify(embedding), f32ToBytes(toUnitVec(embedding, dims)))
     .run();
   if (res.meta.last_row_id == null) throw new Error("save memory: missing row id");
+  await db
+    .prepare("INSERT INTO memories_fts(id, text) VALUES (?,?)")
+    .bind(res.meta.last_row_id, text)
+    .run();
   return res.meta.last_row_id;
 }
 
@@ -609,7 +614,9 @@ export async function updateMemory(
     .prepare("UPDATE memories SET text = ?, embedding = ?, emb = ? WHERE id = ? AND chat_id = ?")
     .bind(text, JSON.stringify(embedding), f32ToBytes(toUnitVec(embedding, dims)), id, chatId)
     .run();
-  return (res.meta.changes ?? 0) === 1;
+  if ((res.meta.changes ?? 0) !== 1) return false;
+  await db.prepare("UPDATE memories_fts SET text = ? WHERE id = ?").bind(text, id).run();
+  return true;
 }
 
 /** Recall window: newest-first bounded scan + total for cap-warning math. */
@@ -644,6 +651,30 @@ export async function memoriesForRecall(
 /** Lazy backfill: writes the normalized BLOB for a legacy JSON-embedding row. */
 export async function backfillEmb(db: D1Database, id: number, bytes: ArrayBuffer): Promise<void> {
   await db.prepare("UPDATE memories SET emb = ? WHERE id = ?").bind(bytes, id).run();
+}
+
+/**
+ * 0018 keyword leg: BM25-ranked memory ids for an already-escaped FTS5
+ * MATCH query, chat-scoped via join. Empty array on no match. Throws on
+ * bad MATCH syntax (callers build the query from quoted tokens only).
+ */
+export async function ftsSearchMemories(
+  db: D1Database,
+  chatId: number,
+  matchQuery: string,
+  limit: number,
+): Promise<Array<{ id: number; text: string }>> {
+  const res = await db
+    .prepare(
+      `SELECT m.id AS id, m.text AS text FROM memories_fts
+       JOIN memories m ON m.id = memories_fts.id
+       WHERE memories_fts MATCH ? AND m.chat_id = ?
+       ORDER BY rank ASC
+       LIMIT ?`,
+    )
+    .bind(matchQuery, chatId, limit)
+    .all<{ id: number; text: string }>();
+  return res.results;
 }
 
 /** Audit trail for fact/memory mutations: who changed what, from which turn. */

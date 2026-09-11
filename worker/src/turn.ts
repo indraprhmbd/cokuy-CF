@@ -19,6 +19,7 @@ import {
   getOrCreateConversation,
   getProfileFacts,
   markUpdateProcessed,
+  ftsSearchMemories,
   memoriesForRecall,
   messagesChunk,
   openLoopOrExisting,
@@ -68,6 +69,11 @@ const RECALL_BUDGET_CHARS = 1500;
 const RECALL_SKIP_RUNES = 6;
 /** Bounded newest-first scan window (0017). Total rides along for cap math. */
 const RECALL_MAX_ROWS = 500;
+/** 0018 hybrid: per-leg candidate depth feeding RRF. */
+const RECALL_FTS_LIMIT = 20;
+const RECALL_COS_LIMIT = 20;
+/** Standard RRF constant. */
+const RRF_K = 60;
 
 function truncate(s: string, max: number): string {
   const runes = [...s];
@@ -346,6 +352,59 @@ async function recordFeedSignals(
   log("info", "feedback signal", { correction: isCorrection, rephrase: isRephrase });
 }
 
+type RecallSource = "cos" | "fts" | "both";
+
+interface FusedRecallCandidate {
+  id: number;
+  text: string;
+  score: number;
+  source: RecallSource;
+  cosScore?: number;
+}
+
+function ftsMatchQuery(text: string): string {
+  const tokens = text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  return tokens.map((token) => `"${token.replace(/"/g, '""')}"`).join(" OR ");
+}
+
+function fuseRecallCandidates(
+  cosine: Array<{ id: number; text: string; s: number }>,
+  fts: Array<{ id: number; text: string }>,
+): FusedRecallCandidate[] {
+  const byId = new Map<number, FusedRecallCandidate>();
+
+  for (const [index, candidate] of cosine.entries()) {
+    byId.set(candidate.id, {
+      id: candidate.id,
+      text: candidate.text,
+      score: 1 / (RRF_K + index + 1),
+      source: "cos",
+      cosScore: candidate.s,
+    });
+  }
+  for (const [index, candidate] of fts.entries()) {
+    const existing = byId.get(candidate.id);
+    if (existing) {
+      existing.score += 1 / (RRF_K + index + 1);
+      existing.source = "both";
+      continue;
+    }
+    byId.set(candidate.id, {
+      id: candidate.id,
+      text: candidate.text,
+      score: 1 / (RRF_K + index + 1),
+      source: "fts",
+    });
+  }
+
+  return [...byId.values()].sort(
+    (a, b) =>
+      b.score - a.score ||
+      (b.cosScore ?? -Infinity) - (a.cosScore ?? -Infinity) ||
+      a.id - b.id,
+  );
+}
+
 /**
  * 0013 semantic recall. Embeds the query, cosine-scores same-chat
  * memories, injects top-k above threshold inside a char budget with
@@ -362,7 +421,6 @@ async function recallMemories(
   const baseURL = env.LLM_BASE_URL;
   const apiKey = env.LLM_API_KEY;
   const model = env.LLM_EMBED_MODEL;
-  if (!baseURL || !apiKey || !model) return "";
   let extra: Record<string, string> = {};
   if (env.LLM_EXTRA_HEADERS?.trim()) {
     try {
@@ -373,85 +431,133 @@ async function recallMemories(
   }
   const dims = embedDims(env.LLM_EMBED_DIMS);
   const started = Date.now();
-  let query: Float32Array;
+  let query: Float32Array | null = null;
   let gotDims = 0;
   let promptTokens = 0;
-  try {
-    const r = await embedTexts(baseURL, apiKey, model, [text], extra, dims);
-    query = toUnitVec(r.vectors[0], dims);
-    gotDims = r.dims;
-    promptTokens = r.usage.prompt;
-  } catch (err) {
-    log("warn", "recall: embed failed", { err: String(err) });
-    return "";
+  let embedError = "";
+  if (baseURL && apiKey && model) {
+    try {
+      const r = await embedTexts(baseURL, apiKey, model, [text], extra, dims);
+      query = toUnitVec(r.vectors[0], dims);
+      gotDims = r.dims;
+      promptTokens = r.usage.prompt;
+    } catch (err) {
+      embedError = String(err);
+      log("warn", "recall: embed failed", { err: embedError });
+    }
   }
-  log("info", "recall: embedded", { dims: gotDims, latency_ms: Date.now() - started });
-  let rows: RecallRow[];
+  if (query) log("info", "recall: embedded", { dims: gotDims, latency_ms: Date.now() - started });
+
+  let rows: RecallRow[] = [];
   let total = 0;
+  let loadError = "";
   try {
     const w = await memoriesForRecall(env.DB, chatId, RECALL_MAX_ROWS);
     rows = w.rows;
     total = w.total;
   } catch (err) {
-    log("warn", "recall: load memories failed", { err: String(err) });
-    return "";
+    loadError = String(err);
+    log("warn", "recall: load memories failed", { err: loadError });
   }
-  // Resolve vectors: BLOB first, legacy JSON self-heals into BLOB.
-  const backfill: Array<{ id: number; bytes: ArrayBuffer }> = [];
-  const scored: Array<{ id: number; text: string; s: number }> = [];
-  for (const m of rows) {
-    let v = bytesToF32(m.emb);
-    if (!v && m.legacy) {
-      try {
-        const arr = JSON.parse(m.legacy) as unknown;
-        if (Array.isArray(arr) && arr.length > 0) {
-          v = toUnitVec(arr as number[], dims);
-          backfill.push({ id: m.id, bytes: f32ToBytes(v) });
+
+  const cosine: Array<{ id: number; text: string; s: number }> = [];
+  if (query) {
+    const backfill: Array<{ id: number; bytes: ArrayBuffer }> = [];
+    for (const m of rows) {
+      let v = bytesToF32(m.emb);
+      if (!v && m.legacy) {
+        try {
+          const arr = JSON.parse(m.legacy) as unknown;
+          if (Array.isArray(arr) && arr.length > 0) {
+            v = toUnitVec(arr as number[], dims);
+            backfill.push({ id: m.id, bytes: f32ToBytes(v) });
+          }
+        } catch {
+          continue;
         }
-      } catch {
-        continue;
       }
+      if (!v) continue;
+      const s = dot(query, v);
+      if (s >= RECALL_THRESHOLD) cosine.push({ id: m.id, text: m.text, s });
     }
-    if (!v) continue;
-    const s = dot(query, v);
-    if (s >= RECALL_THRESHOLD) scored.push({ id: m.id, text: m.text, s });
+    cosine.sort((a, b) => b.s - a.s);
+    for (const b of backfill) {
+      await backfillEmb(env.DB, b.id, b.bytes).catch(() => undefined);
+    }
   }
-  scored.sort((a, b) => b.s - a.s);
-  const top = scored.slice(0, RECALL_TOP_K);
+  const cosCandidates = cosine.slice(0, RECALL_COS_LIMIT);
+
+  const matchQuery = ftsMatchQuery(text);
+  let ftsCandidates: Array<{ id: number; text: string }> = [];
+  let ftsError = "";
+  if (matchQuery) {
+    try {
+      ftsCandidates = await ftsSearchMemories(env.DB, chatId, matchQuery, RECALL_FTS_LIMIT);
+    } catch (err) {
+      ftsError = String(err);
+      log("warn", "recall: FTS failed", { err: ftsError });
+    }
+  }
+
+  const ftsIds = new Set(ftsCandidates.map((candidate) => candidate.id));
+  const overlap = cosCandidates.filter((candidate) => ftsIds.has(candidate.id)).length;
+  const fused = fuseRecallCandidates(cosCandidates, ftsCandidates);
   const recallMs = Date.now() - started;
   const recordRecall = (error: string) =>
     recordTurnStat(env.DB, {
       updateId, kind: "recall", chatId, promptTokens, completionTokens: 0,
-      totalTokens: promptTokens, model, latencyMs: recallMs, error,
+      totalTokens: promptTokens, model: model ?? "", latencyMs: recallMs, error,
     }).catch((err) => log("warn", "recall: stat failed", { err: String(err) }));
-  if (top.length === 0) {
-    log("info", "recall: no hit", { scanned: rows.length, total, dims });
-    await recordRecall("");
+  if (fused.length === 0) {
+    log("info", "recall: no hit", {
+      scanned: rows.length,
+      total,
+      dims,
+      cos_candidates: cosCandidates.length,
+      fts_candidates: ftsCandidates.length,
+      overlap,
+      embed_error: embedError || undefined,
+      load_error: loadError || undefined,
+      fts_error: ftsError || undefined,
+    });
+    await recordRecall([embedError, loadError, ftsError].filter(Boolean).join("; "));
     return "";
   }
-  // Budget newest-first? No: score order carries relevance; clamp lines.
+
+  const top = fused.slice(0, RECALL_TOP_K);
   let chars = 0;
   const kept: typeof top = [];
-  for (const x of top) {
-    const len = [...x.text].length;
+  for (const candidate of top) {
+    const len = [...candidate.text].length;
     if (chars + len > RECALL_BUDGET_CHARS && kept.length > 0) break;
     chars += len;
-    kept.push(x);
+    kept.push(candidate);
   }
-  const ids = kept.map((x) => x.id);
+  const ids = kept.map((candidate) => candidate.id);
   await touchMemories(env.DB, ids).catch((err) =>
     log("warn", "recall: touch failed", { err: String(err) }),
   );
-  for (const b of backfill) {
-    await backfillEmb(env.DB, b.id, b.bytes).catch(() => undefined);
-  }
-  await recordRecall("");
+  await recordRecall([embedError, loadError, ftsError].filter(Boolean).join("; "));
+  const ftsOnly = kept.filter((candidate) => candidate.source === "fts").length;
   log("info", "recall: hit", {
-    kept: kept.length, scanned: rows.length, total, dims, top: kept[0].s.toFixed(3),
+    kept: kept.length,
+    scanned: rows.length,
+    total,
+    dims,
+    cos_candidates: cosCandidates.length,
+    fts_candidates: ftsCandidates.length,
+    overlap,
+    fts_only: ftsOnly,
+    top: kept[0].score.toFixed(3),
+    picks: kept.map((candidate) => ({
+      id: candidate.id,
+      source: candidate.source,
+      rrf: Math.round(candidate.score * 1_000_000) / 1_000_000,
+    })),
   });
   return (
     "Relevant past memories ([mID] = memory id, most relevant first): " +
-    kept.map((x) => `[m${x.id}] ${truncate(x.text.trim(), 400)}`).join(" | ")
+    kept.map((candidate) => `[m${candidate.id}] ${truncate(candidate.text.trim(), 400)}`).join(" | ")
   );
 }
 
