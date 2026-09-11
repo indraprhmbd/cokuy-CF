@@ -79,10 +79,11 @@ export function createSender(env: Env): Sender | null {
   const bot = new Bot(env.BOT_TOKEN, options);
   /**
    * Human-like fragmentation: long multi-paragraph replies send as up to 3
-   * bubbles; short or single-paragraph replies always stay one. Split points
-   * are the model's own blank lines. A tiny tail (<40 chars) merges into the
-   * previous bubble so a lone "wkwk" never travels alone. Overflow paragraphs
-   * merge into the last bubble. Pure function: unit-testable, no I/O.
+   * balanced bubbles; short or single-paragraph replies always stay one.
+   * Split points are the model's own blank lines; paragraphs distribute
+   * greedily so no bubble becomes the overflow dump. A tiny tail (<40 chars)
+   * merges into the previous bubble so a lone "wkwk" never travels alone.
+   * Pure function: unit-testable, no I/O.
    */
   function splitReply(text: string): string[] {
     const paras = text
@@ -90,14 +91,27 @@ export function createSender(env: Env): Sender | null {
       .map((p) => p.trim())
       .filter((p) => p.length > 0);
     if (paras.length < 2 || [...text].length < 120) return [text];
-    const parts = paras.slice(0, 3);
-    if (paras.length > 3) parts[2] = [...parts.slice(2), ...paras.slice(3)].join("\n\n");
-    const tail = parts[parts.length - 1];
-    if (parts.length > 1 && [...tail].length < 40) {
-      parts[parts.length - 2] = parts[parts.length - 2] + "\n" + tail;
-      parts.pop();
+    const sizes = paras.map((p) => [...p].length);
+    const total = sizes.reduce((a, b) => a + b, 0);
+    const target = total / Math.min(3, paras.length);
+    const parts: string[][] = [[]];
+    let run = 0;
+    for (const [i, p] of paras.entries()) {
+      const last = parts.length === Math.min(3, paras.length);
+      if (!last && run > 0 && run + sizes[i] / 2 > target) {
+        parts.push([]);
+        run = 0;
+      }
+      parts[parts.length - 1].push(p);
+      run += sizes[i];
     }
-    return parts;
+    const out = parts.map((g) => g.join("\n\n"));
+    const tail = out[out.length - 1];
+    if (out.length > 1 && [...tail].length < 40) {
+      out[out.length - 2] = out[out.length - 2] + "\n" + tail;
+      out.pop();
+    }
+    return out;
   }
   async function sendText(
     chatId: number,
@@ -126,6 +140,11 @@ export function createSender(env: Env): Sender | null {
       const parts = splitReply(text);
       let failures = 0;
       for (const [i, part] of parts.entries()) {
+        // Thinking pause between bubbles (1-5s random): timers idle the
+        // event loop, no CPU burn. First bubble sends immediately.
+        if (i > 0) {
+          await new Promise((r) => setTimeout(r, 1000 + Math.random() * 4000));
+        }
         try {
           await sendText(chatId, part);
         } catch (err) {
