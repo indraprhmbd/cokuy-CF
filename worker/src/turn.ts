@@ -301,11 +301,14 @@ export async function handleUpdate(
     log("error", "persist assistant message failed", { err: String(err) });
     return;
   }
+  // First bubble now (fast ack feel); the rest go out after the durable
+  // pipeline so thinking pauses never push detection past the waitUntil
+  // wall clock. First-bubble failure keeps the old contract: turn stays
+  // unprocessed, redelivery retries without re-calling the model.
+  let rest: string[];
   try {
-    await sender.sendReply(chatId, reply);
+    rest = await sender.sendFirst(chatId, reply);
   } catch (err) {
-    // State durable, turn stays unprocessed; redelivery retries the send
-    // without re-calling the model (dedupe via claim).
     log("error", "send reply failed", { err: String(err) });
     return;
   }
@@ -324,6 +327,9 @@ export async function handleUpdate(
   await compactIfNeeded(env, llm, updateId, convId, chatId, priorSummary, log);
   // 0012 feedback signals: pure local heuristics, one tiny write.
   await recordFeedSignals(env, updateId, text, history, log);
+  // Leftover bubbles, best-effort: state is durable, a lost tail is only
+  // a shorter reply, never lost memory.
+  await sender.sendRest(chatId, rest);
 }
 
 /** Explicit correction opener (ID + EN). Anchored: only the turn start counts. */

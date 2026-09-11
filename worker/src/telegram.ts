@@ -16,6 +16,9 @@ export function webhookAuthorized(req: Request, secret: string | undefined): boo
 
 export interface Sender {
   sendReply(chatId: number, text: string): Promise<void>;
+  /** First bubble immediately; rest after pipeline (keeps waitUntil budget for detection). */
+  sendFirst(chatId: number, text: string): Promise<string[]>;
+  sendRest(chatId: number, parts: string[]): Promise<void>;
   sendTyping(chatId: number): Promise<void>;
   sendWithKeyboard(chatId: number, text: string, keyboard: InlineKeyboard): Promise<number>;
   answerCallback(callbackId: string, text?: string): Promise<void>;
@@ -165,9 +168,37 @@ export function createSender(env: Env): Sender | null {
       return bot.api.sendMessage(chatId, text, extra);
     }
   }
+  /** One bubble via sendText. Throws: first-bubble failure is fatal to the turn. */
+  async function sendOne(chatId: number, part: string, which: string): Promise<void> {
+    try {
+      await sendText(chatId, part);
+    } catch (err) {
+      console.warn(JSON.stringify({ msg: "send: bubble failed", chat_id: chatId, bubble: which, err: String(err) }));
+      throw err;
+    }
+  }
+  /** Remaining bubbles with thinking pauses. Best-effort: logs and never throws. */
+  async function sendRest(chatId: number, parts: string[], offset: number): Promise<void> {
+    for (const [i, part] of parts.entries()) {
+      // Timers idle the event loop, no CPU burn.
+      await new Promise((r) => setTimeout(r, 1000 + Math.random() * 4000));
+      try {
+        await sendText(chatId, part);
+      } catch (err) {
+        console.warn(
+          JSON.stringify({
+            msg: "sendRest: bubble failed, continuing",
+            chat_id: chatId,
+            bubble: `${offset + i + 1}`,
+            err: String(err),
+          }),
+        );
+      }
+    }
+  }
   return {
     /**
-     * Conversational replies fragment into up to 3 bubbles. Each bubble
+     * Conversational replies fragment into balanced bubbles. Each bubble
      * sends independently: a failed middle bubble logs and continues, so a
      * formatting edge degrades to a shorter reply, never a lost one. Throws
      * only when every bubble failed (preserves the old total-failure
@@ -175,30 +206,22 @@ export function createSender(env: Env): Sender | null {
      */
     async sendReply(chatId: number, text: string): Promise<void> {
       const parts = splitReply(text);
-      let failures = 0;
-      for (const [i, part] of parts.entries()) {
-        // Thinking pause between bubbles (1-5s random): timers idle the
-        // event loop, no CPU burn. First bubble sends immediately.
-        if (i > 0) {
-          await new Promise((r) => setTimeout(r, 1000 + Math.random() * 4000));
-        }
-        try {
-          await sendText(chatId, part);
-        } catch (err) {
-          failures++;
-          console.warn(
-            JSON.stringify({
-              msg: "sendReply: bubble failed, continuing",
-              chat_id: chatId,
-              bubble: `${i + 1}/${parts.length}`,
-              err: String(err),
-            }),
-          );
-        }
-      }
-      if (failures === parts.length) {
-        throw new Error(`sendReply: all ${parts.length} bubbles failed`);
-      }
+      await sendOne(chatId, parts[0], `1/${parts.length}`);
+      await sendRest(chatId, parts.slice(1), 1);
+    },
+    /**
+     * First bubble now (fast ack feel); caller runs the durable pipeline,
+     * then sendRest delivers the remainder with thinking pauses. Split this
+     * way because pauses used to push detection past the waitUntil wall
+     * clock, silently killing memory formation on long replies.
+     */
+    async sendFirst(chatId: number, text: string): Promise<string[]> {
+      const parts = splitReply(text);
+      await sendOne(chatId, parts[0], `1/${parts.length}`);
+      return parts.slice(1);
+    },
+    async sendRest(chatId: number, parts: string[]): Promise<void> {
+      await sendRest(chatId, parts, 1);
     },
     async sendTyping(chatId: number): Promise<void> {
       await bot.api.sendChatAction(chatId, "typing");
