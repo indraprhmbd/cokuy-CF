@@ -6,6 +6,7 @@
 
 import { Bot } from "grammy";
 import type { Env } from "./env";
+import { markdownToHtml } from "./sanitize";
 
 /** Fail-closed: no configured secret means reject. */
 export function webhookAuthorized(req: Request, secret: string | undefined): boolean {
@@ -76,15 +77,36 @@ export function createSender(env: Env): Sender | null {
     options = undefined;
   }
   const bot = new Bot(env.BOT_TOKEN, options);
+  /**
+   * Sends text as HTML when it carries model Markdown, else plain. HTML
+   * failures (bad entities from odd model output) fall back to plain text
+   * so a formatting edge never eats the reply. Plain-text sends keep the
+   * old throw-on-failure contract.
+   */
+  async function sendText(
+    chatId: number,
+    text: string,
+    extra?: { reply_markup: InlineKeyboard },
+  ): Promise<{ message_id: number }> {
+    const html = markdownToHtml(text);
+    if (html === null) {
+      return bot.api.sendMessage(chatId, text, extra);
+    }
+    try {
+      return await bot.api.sendMessage(chatId, html, { parse_mode: "HTML", ...extra });
+    } catch {
+      return bot.api.sendMessage(chatId, text, extra);
+    }
+  }
   return {
     async sendReply(chatId: number, text: string): Promise<void> {
-      await bot.api.sendMessage(chatId, text);
+      await sendText(chatId, text);
     },
     async sendTyping(chatId: number): Promise<void> {
       await bot.api.sendChatAction(chatId, "typing");
     },
     async sendWithKeyboard(chatId: number, text: string, keyboard: InlineKeyboard): Promise<number> {
-      const msg = await bot.api.sendMessage(chatId, text, { reply_markup: keyboard });
+      const msg = await sendText(chatId, text, { reply_markup: keyboard });
       return msg.message_id;
     },
     async answerCallback(callbackId: string, text?: string): Promise<void> {
@@ -96,9 +118,17 @@ export function createSender(env: Env): Sender | null {
       text: string,
       keyboard: InlineKeyboard | null,
     ): Promise<void> {
-      await bot.api.editMessageText(chatId, messageId, text, {
-        ...(keyboard ? { reply_markup: keyboard } : {}),
-      });
+      const html = markdownToHtml(text);
+      const base = keyboard ? { reply_markup: keyboard } : {};
+      if (html === null) {
+        await bot.api.editMessageText(chatId, messageId, text, base);
+        return;
+      }
+      try {
+        await bot.api.editMessageText(chatId, messageId, html, { parse_mode: "HTML", ...base });
+      } catch {
+        await bot.api.editMessageText(chatId, messageId, text, base);
+      }
     },
   };
 }

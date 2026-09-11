@@ -54,3 +54,25 @@ export function sanitizeReply(s: string): { text: string; stripped: number } {
   }
   return { text: out, stripped };
 }
+
+/**
+ * Model Markdown (classic **bold**, `code`) to Telegram HTML. Returns null
+ * when the text carries no markup, so plain replies skip parse_mode entirely.
+ * Runs AFTER sanitizeReply: input is ASCII + known punctuation + emoji, so
+ * escaping & < > first is sufficient. Unbalanced markers pass through as
+ * literal text; Telegram tolerates stray asterisks in HTML mode.
+ */
+export function markdownToHtml(s: string): string | null {
+  let has = false;
+  const esc = s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const html = esc
+    .replace(/\*\*([^*\n]+?)\*\*/g, (_m, inner: string) => {
+      has = true;
+      return `<b>${inner}</b>`;
+    })
+    .replace(/`([^`\n]+?)`/g, (_m, inner: string) => {
+      has = true;
+      return `<code>${inner}</code>`;
+    });
+  return has ? html : null;
+}
