@@ -1,4 +1,4 @@
-# 0012 — Learning loops: counters first, LLM only where code can't decide
+# 0012 - Learning loops: counters first, LLM only where code can't decide
 
 Status: accepted, Phase A building
 Date: 2026-09-09
@@ -16,9 +16,9 @@ training, no reward models, no vector DB at single-user scale. Explicit
 user statements beat inferred preferences; implicit signals (rephrase,
 correction) are dashboard/eval inputs, never automatic prompt rewrites
 (noisy, perverse incentives). Fine-tuning only after design + evals
-validate — not this scale, not this budget.
+validate - not this scale, not this budget.
 
-## Phase A — zero LLM (this sprint)
+## Phase A - zero LLM (this sprint)
 
 1. Correction + rephrase counters. `turn_feedback(update_id PK,
    is_correction, is_rephrase)`. Correction = regex on user text
@@ -32,7 +32,7 @@ validate — not this scale, not this budget.
    latest-wins header. Prompt template only. Kill if correction rate
    doesn't drop over 100 turns.
 
-## Phase B — deferred until counters prove signal
+## Phase B - deferred until counters prove signal
 
 4. Preference overwrite with Telegram confirm gate.
 5. Weekly batched dedupe, one cheap call.

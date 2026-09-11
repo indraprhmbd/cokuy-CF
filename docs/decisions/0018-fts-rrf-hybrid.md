@@ -1,4 +1,4 @@
-# 0018 — FTS5 + RRF hybrid recall (CF)
+# 0018 - FTS5 + RRF hybrid recall (CF)
 
 Status: accepted, shipped, verifying live
 Date: 2026-09-10
@@ -17,7 +17,7 @@ blind spot either way. Probed remote D1: FTS5 fully works
    `CREATE VIRTUAL TABLE memories_fts USING fts5(id UNINDEXED, text)`.
    Plain table (not external-content): survives on its own, backfilled
    by `INSERT INTO memories_fts(id, text) SELECT id, text FROM memories`.
-   Code syncs writes (save/update/delete paths) — no triggers, D1
+   Code syncs writes (save/update/delete paths) - no triggers, D1
    trigger behavior stays unprobed and unneeded.
 2. **Query builder escapes everything.** Tokenize (lowercase, alnum),
    double-quote each token, join with OR. Reserved syntax can never
@@ -25,7 +25,7 @@ blind spot either way. Probed remote D1: FTS5 fully works
 3. **RRF merge, k=60.** Cosine top-20 (threshold still 0.72 applies to
    the cosine list) + FTS top-20 by BM25 rank; fused score
    Σ 1/(60+rank). Final top-5 inside the existing 1500-char budget.
-   FTS candidates enter regardless of cosine — that IS the point
+   FTS candidates enter regardless of cosine - that IS the point
    (keyword hits cosine misses).
 4. **Logging carries deltas.** Recall ledger gains overlap count +
    per-pick source (cos/fts/both). Weekly digest compares hit-rate
@@ -57,7 +57,7 @@ learning-to-rank (needs volume nobody has).
 
 `fuseRecallCandidates` skipped FTS-loop ids already present from the
 cosine loop (`if (existing) continue`), so dual-hit docs got only the
-cosine-leg score — the FTS leg never boosted them, and the `"both"`
+cosine-leg score - the FTS leg never boosted them, and the `"both"`
 label in the FTS branch was dead code. Fixed: FTS leg now accumulates
 `1/(60+rank)` onto the existing entry and upgrades source to `"both"`.
 RRF math re-verified by unit check (dual-hit outranks single-leg).

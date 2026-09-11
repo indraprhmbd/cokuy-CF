@@ -1,4 +1,4 @@
-# 0006 — Proactive loops, reminders, briefing
+# 0006 - Proactive loops, reminders, briefing
 
 Status: accepted (2026-09-09)
 
@@ -49,7 +49,7 @@ Post-turn LLM extraction call with strict JSON schema:
 
 - Runs after reply sent + update marked processed: never delays user reply.
 - Due times are relative minutes (model picks offset, Go computes
-  `due_at` from WIB now) — no model date math.
+  `due_at` from WIB now) - no model date math.
 - Validated hard: non-empty titles <=200 chars, due 1..43200 min,
   close_ids must exist in that chat's open list. Rejected loudly (log),
   never persisted half-parsed.

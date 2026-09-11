@@ -1,4 +1,4 @@
-# 0005 — monitoring dashboard and metrics endpoint
+# 0005 - monitoring dashboard and metrics endpoint
 
 Status: accepted (2026-09-09)
 

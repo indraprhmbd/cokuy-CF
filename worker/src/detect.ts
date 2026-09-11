@@ -200,7 +200,7 @@ function clampRunes(s: string, max: number): string {
 /**
  * Partial-accept validation: bad items are dropped (counts in `dropped`),
  * overlong strings clamped, unknown close_ids ignored. Only throws when no
- * JSON payload exists at all — callers retry once on throw.
+ * JSON payload exists at all - callers retry once on throw.
  */
 export function parseDetection(raw: string, open: OpenLoop[], toolArgs: string | null = null): PartialResult {
   const det = extractPayload(raw, toolArgs) as Record<string, unknown>;

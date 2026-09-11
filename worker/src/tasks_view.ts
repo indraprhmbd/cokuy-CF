@@ -38,7 +38,7 @@ function wibDayMonth(iso: string): string {
 
 function taskLine(t: TaskRow, now: Date): string {
   const due = t.dueAt ? ` (jatuh tempo ${wibDayMonth(t.dueAt)})` : "";
-  const over = t.dueAt && t.dueAt < now.toISOString() ? " — telat!" : "";
+  const over = t.dueAt && t.dueAt < now.toISOString() ? " - telat!" : "";
   const dl = t.deadlineAt ? ` [deadline ${wibDayMonth(t.deadlineAt)}]` : "";
   return `- ${t.title}${due}${over}${dl}`;
 }
@@ -157,7 +157,7 @@ export async function handleCallback(
       .answerCallback(callbackId, moved ? "beres. mantap." : "udah beres / nggak ada.")
       .catch(() => undefined);
     if (moved) {
-      await sender.editTaskMessage(chatId, messageId, `${origText}\n— beres.`, null).catch((err) =>
+      await sender.editTaskMessage(chatId, messageId, `${origText}\n- beres.`, null).catch((err) =>
         log("warn", "callback: edit failed", { err: String(err) }),
       );
     }
@@ -176,7 +176,7 @@ export async function handleCallback(
     .answerCallback(callbackId, `diundur ke ${when}.`)
     .catch(() => undefined);
   await sender
-    .editTaskMessage(chatId, messageId, `${origText}\n— diundur ke ${when}.`, taskKeyboard(parsed.taskId))
+    .editTaskMessage(chatId, messageId, `${origText}\n- diundur ke ${when}.`, taskKeyboard(parsed.taskId))
     .catch((err) => log("warn", "callback: edit failed", { err: String(err) }));
   await done();
 }

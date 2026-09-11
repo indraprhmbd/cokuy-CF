@@ -1,4 +1,4 @@
-# 0008 — Memory layers (profile first, $0 preserved)
+# 0008 - Memory layers (profile first, $0 preserved)
 
 Status: M1 shipped + live, M3 shipped (awaiting pressure to fire)
 
@@ -18,7 +18,7 @@ return. Transcript is fallback, not memory architecture (AGENTS.md).
   state must live outside lossy summaries.
 - CF blocks verified: Workers AI embeddings (bge-small, 10k
   neurons/day free), Vectorize (30M dims/mo allocation on paper, but
-  Aug 2026 pricing gates it to Workers Paid $5/mo — avoided).
+  Aug 2026 pricing gates it to Workers Paid $5/mo - avoided).
 - Personal scale needs no vector DB: hundreds of facts, cosine
   in-worker against D1 rows is microseconds.
 

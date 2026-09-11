@@ -1,4 +1,4 @@
-# 0017 — Retrieval scaling: 256-d + BLOB + bounded window (CF)
+# 0017 - Retrieval scaling: 256-d + BLOB + bounded window (CF)
 
 Status: accepted, building
 Date: 2026-09-10

@@ -136,7 +136,7 @@ export async function handleUpdate(
   }
 
   // Deviation from Go (documented): Go can't boot without token/LLM env;
-  // the Worker stays up for /health, so turns fail closed here instead —
+  // the Worker stays up for /health, so turns fail closed here instead -
   // before the claim, so a redelivery retries after the config is fixed.
   const sender = createSender(env);
   const llm = buildLlm(env);

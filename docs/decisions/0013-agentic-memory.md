@@ -1,4 +1,4 @@
-# 0013 — Agentic memory: semantic recall + memory-as-tools (CF)
+# 0013 - Agentic memory: semantic recall + memory-as-tools (CF)
 
 Status: accepted, Sprint 1 + Sprint 2 shipped
 Date: 2026-09-09
@@ -59,7 +59,7 @@ zero memories, logged, never blocking.
 ### Turn pipeline changes
 
 1. Turn start: embed user query (skip when router says chit-chat and no
-   loops open — same pre-gate as detector). Brute-force cosine over
+   loops open - same pre-gate as detector). Brute-force cosine over
    same-chat rows only, top-5 above threshold 0.72, char budget 1500.
    Inject with memory IDs (`[m12]`) so use is trackable. Bump
    `last_used`/`use_count` on injected rows.
@@ -84,7 +84,7 @@ zero memories, logged, never blocking.
 
 ### Consolidation (extends 0012 Phase B dedupe)
 
-Weekly tick: feed `memories` + `fact_history` to the summarizer call —
+Weekly tick: feed `memories` + `fact_history` to the summarizer call -
 merge duplicates, resolve conflicts (recency wins, session over global),
 drop `this-trip` ephemerals, delete superseded rows. One cheap call.
 

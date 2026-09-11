@@ -1,19 +1,19 @@
-# 0016 — Command surface + usage tool (CF)
+# 0016 - Command surface + usage tool (CF)
 
 Status: accepted, building
 Date: 2026-09-10
 
 ## Set (8 commands, no more)
 
-- `/start` — first contact (allowlisted only, strangers keep silent drop).
-- `/help` — command list, one line each.
-- `/today` — exists (0015). Unchanged.
-- `/brief` — on-demand briefing; reuses `handleToday` renderer, cron comes later.
-- `/usage` — token + USD readout from the ledger, today + 7d, per-chat.
-- `/remember <fact>` — explicit memory save (embed + store, ack after write).
-- `/forget <keyword>` — deletes matching memories + profile facts, reports
+- `/start` - first contact (allowlisted only, strangers keep silent drop).
+- `/help` - command list, one line each.
+- `/today` - exists (0015). Unchanged.
+- `/brief` - on-demand briefing; reuses `handleToday` renderer, cron comes later.
+- `/usage` - token + USD readout from the ledger, today + 7d, per-chat.
+- `/remember <fact>` - explicit memory save (embed + store, ack after write).
+- `/forget <keyword>` - deletes matching memories + profile facts, reports
   what was removed. Explicit user delete is the only silent-write path.
-- `/quiet [HH:MM-HH:MM]` — view/set quiet window in prefs. No args = show.
+- `/quiet [HH:MM-HH:MM]` - view/set quiet window in prefs. No args = show.
 
 Plus `get_usage` LLM tool returning the same numbers as JSON so the
 model answers cost questions truthfully instead of guessing.

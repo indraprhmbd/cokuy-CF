@@ -1,11 +1,11 @@
-# 0014 — Positioning: serverless companion kit (cokuy-CF is the project)
+# 0014 - Positioning: serverless companion kit (cokuy-CF is the project)
 
 Status: accepted
 Date: 2026-09-10
 
 ## Decision
 
-cokuy-CF is the project. Positioning: **serverless companion kit** —
+cokuy-CF is the project. Positioning: **serverless companion kit** -
 zero-device, zero-cost, persona-first, fork-and-own-your-guy, with
 receipts. GO repo stays a frozen archive.
 
@@ -27,7 +27,7 @@ receipts. GO repo stays a frozen archive.
 - PicoClaw can't run on Workers: Go doesn't compile there, and its
   load-bearing parts (gateway server, long-poll daemon, filesystem,
   subprocess/MCP-stdio, code exec, internal cron) are all forbidden.
-  A port would have to become webhook + D1 + triggers — cokuy-shaped,
+  A port would have to become webhook + D1 + triggers - cokuy-shaped,
   minus our head start on budgets, idempotency, and ledger.
 - Nobody owns character-first (fixed persona, stated limits) or
   published receipts (cost ledger, kill criteria, decision docs).
@@ -38,7 +38,7 @@ Single-account + free-tier policy risk + quota cliffs + Gateway
 lock-in (LLM path runs through CF Gateway; direct-Sumopod base URL
 is the documented outage fallback). Mitigations: portable SQL dumps
 (add weekly export routine), provider-agnostic wire format, GO VPS
-rollback. Nothing beyond that — blast radius is one person's chatbot.
+rollback. Nothing beyond that - blast radius is one person's chatbot.
 Experimental scope is explicit in the name.
 
 ## GO repo future

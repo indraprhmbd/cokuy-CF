@@ -1,7 +1,7 @@
 // Telegram boundary: webhook auth + sends. Sends go through the grammY Bot
 // API client (BOT_INFO var skips the getMe cold call); the turn pipeline
 // acks the webhook immediately and does heavy work in waitUntil, so grammY's
-// webhookCallback is deliberately NOT used — it awaits handlers and would
+// webhookCallback is deliberately NOT used - it awaits handlers and would
 // hold the 200 through the LLM call.
 
 import { Bot } from "grammy";

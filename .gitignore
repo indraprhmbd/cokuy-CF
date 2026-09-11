@@ -1,4 +1,4 @@
-# secrets / local env — never commit
+# secrets / local env - never commit
 .env
 .env.*
 .dev.vars
@@ -13,3 +13,6 @@ build/
 .wrangler/
 
 graphify-out/
+
+# retired local-only dashboard (SvelteKit, superseded by CF dashboard) - keep on disk, never track
+dashboard/

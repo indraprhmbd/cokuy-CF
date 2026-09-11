@@ -1,4 +1,4 @@
-# 0015 — Work manager: tasks, buttons, Today, prefs (then digests)
+# 0015 - Work manager: tasks, buttons, Today, prefs (then digests)
 
 Status: accepted, Phase 1 building
 Date: 2026-09-10
@@ -63,7 +63,7 @@ CREATE TABLE prefs(
 - Webhook accepts `callback_query` updates (in addition to `message`).
   Same allowlist + secret gate; strangers silently dropped.
   Ops trap (hit live 2026-09-10): webhook `allowed_updates` was
-  `["message"]` from the GO-poller era, so presses never arrived —
+  `["message"]` from the GO-poller era, so presses never arrived -
   buttons rendered, spinner hung, zero worker logs. Any future
   setWebhook MUST pass `allowed_updates=["message","callback_query"]`
   AND re-pass the current `secret_token` (omitting it wipes auth).
@@ -78,7 +78,7 @@ CREATE TABLE prefs(
 
 `record_state` gains `tasks[]` (`title`, `dueInMinutes?`,
 `deadlineInMinutes?`, `rrule?`, `label?`). Partial-accept like
-`memories[]`. Save path: INSERT into tasks (no dedupe key — two
+`memories[]`. Save path: INSERT into tasks (no dedupe key - two
 identical titles are two tasks; idempotency stays at update_id claim
 level). NL dates ("tomorrow 9am", "every mon") parsed by the model
 into relative minutes + rrule strings; code validates ranges only.

@@ -87,12 +87,12 @@ export async function usageReport(env: Env, chatId: number): Promise<UsageReport
 
 const HELP_TEXT =
   "Perintah gue:\n" +
-  "/today — tugas hari ini\n" +
-  "/brief — ringkasan sekarang\n" +
-  "/usage — token + dolar minggu ini\n" +
-  "/remember <fakta> — simpan ingatan\n" +
-  "/forget <kata> — hapus ingatan cocok\n" +
-  "/quiet [22:00-07:00] — lihat/atur jam sepi\n" +
+  "/today - tugas hari ini\n" +
+  "/brief - ringkasan sekarang\n" +
+  "/usage - token + dolar minggu ini\n" +
+  "/remember <fakta> - simpan ingatan\n" +
+  "/forget <kata> - hapus ingatan cocok\n" +
+  "/quiet [22:00-07:00] - lihat/atur jam sepi\n" +
   "Selain itu chat biasa aja, gue yang atur.";
 
 const START_TEXT =

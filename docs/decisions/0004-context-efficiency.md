@@ -1,4 +1,4 @@
-# 0004 — context efficiency (prompt budget, date, usage visibility)
+# 0004 - context efficiency (prompt budget, date, usage visibility)
 
 Status: accepted (2026-09-09)
 

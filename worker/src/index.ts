@@ -127,7 +127,7 @@ app.post("/telegram", async (c) => {
   }
 
   // Locked personal bot: strangers silently dropped before any claim, LLM
-  // call, or write — same order as the Go turn.
+  // call, or write - same order as the Go turn.
   let allowed: Set<number>;
   try {
     allowed = parseAllowlist(env.ALLOWED_USER_IDS);

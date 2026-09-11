@@ -15,7 +15,7 @@
 
 const EXTRA = new Set([
   "\u2026", // … ellipsis
-  "\u2014", // — em dash
+  "\u2014", // - em dash
   "\u2013", // – en dash
   "\u2018", // ‘
   "\u2019", // ’
