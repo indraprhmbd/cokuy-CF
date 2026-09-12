@@ -186,7 +186,12 @@ async function drainOutbox(env: Env, sender: Sender, now: Date): Promise<void> {
       await releaseOutboxClaim(env.DB, m.id).catch(() => undefined);
       continue;
     }
-    if (sent >= MAX_PROACTIVE_PER_DAY) {
+    // The daily cap gates bot-initiated sends (nudges, briefings) only.
+    // Explicit user-requested reminders are promises, not spam: capping
+    // them silently breaks "ingetin 20 menit" while looking delivered.
+    // (Proven 2026-09-11: overnight backlog ate the whole day quota at
+    // 07:00 WIB, then a 15:02 reminder deferred all day.)
+    if (m.kind !== "reminder" && sent >= MAX_PROACTIVE_PER_DAY) {
       await release("daily cap");
       continue;
     }
