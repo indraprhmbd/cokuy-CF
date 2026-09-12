@@ -9,6 +9,7 @@ import { bytesToF32, cosine, dot, embedDims, embedTexts, f32ToBytes, toUnitVec }
 import { usageReport } from "./commands";
 import {
   backfillEmb,
+  createReminder,
   memoriesForChat,
   memoriesForRecall,
   recordFactHistory,
@@ -68,8 +69,7 @@ export const UPDATE_FACT_TOOL = {
   },
 };
 
-export const USAGE_TOOL = {
-  type: "function",
+export const USAGE_TOOL = {  type: "function",
   function: {
     name: "get_usage",
     description:
@@ -83,7 +83,25 @@ export const USAGE_TOOL = {
   },
 };
 
-export const MEMORY_TOOLS = [RECALL_TOOL, SAVE_FACT_TOOL, UPDATE_FACT_TOOL, USAGE_TOOL];
+export const SET_REMINDER_TOOL = {
+  type: "function",
+  function: {
+    name: "set_reminder",
+    description:
+      "Set a reminder that WILL be delivered to this chat. Call the moment the user asks to be reminded (ingetin ... menit/jam lagi). The reminder fires even if the user is idle. dueInMinutes is relative to now.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["text", "dueInMinutes"],
+      properties: {
+        text: { type: "string" },
+        dueInMinutes: { type: "integer" },
+      },
+    },
+  },
+};
+
+export const MEMORY_TOOLS = [RECALL_TOOL, SAVE_FACT_TOOL, UPDATE_FACT_TOOL, USAGE_TOOL, SET_REMINDER_TOOL];
 
 export const MEMORY_TOOL_GUIDE =
   "Memory tools: call recall_memories when you need past context not in " +
@@ -91,7 +109,8 @@ export const MEMORY_TOOL_GUIDE =
   "preference, identity detail, or decision (one fact per call, never " +
   "chit-chat); call update_fact with the [mID] when the user corrects a " +
   "stored memory. Never invent memory IDs; call get_usage when the user " +
-  "asks about token usage or cost.";
+  "asks about token usage or cost; call set_reminder the moment the user " +
+  "asks to be reminded, it WILL be delivered, never claim otherwise.";
 
 const MAX_FACT_CHARS = 1000;
 const TOOL_TOP_K = 5;
@@ -207,8 +226,7 @@ export async function executeMemoryTool(
     await recordFactHistory(env.DB, "memories", cur.id, cur.text, text, updateId).catch(() => undefined);
     return JSON.stringify({ updated_id: cur.id });
   }
-  if (name === "get_usage") {
-    try {
+  if (name === "get_usage") {    try {
       const r = await usageReport(env, chatId);
       return JSON.stringify({
         lines: r.lines,
@@ -218,6 +236,24 @@ export async function executeMemoryTool(
       });
     } catch (err) {
       return `error: usage read failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+  if (name === "set_reminder") {
+    const text = typeof args["text"] === "string" ? args["text"].trim() : "";
+    const dueRaw = args["dueInMinutes"];
+    const due = typeof dueRaw === "string" && dueRaw.trim() !== "" ? Number(dueRaw) : dueRaw;
+    if (!text) return "error: text is empty";
+    if (!Number.isInteger(due) || (due as number) < 1 || (due as number) > 43200) {
+      return "error: dueInMinutes must be an integer 1..43200 (minutes from now)";
+    }
+    // Same minute-truncated due as the detector path: redelivery-safe.
+    const dueAt = new Date(Date.now() + (due as number) * 60000);
+    dueAt.setSeconds(0, 0);
+    try {
+      const id = await createReminder(env.DB, chatId, clampRunes(text, MAX_FACT_CHARS), dueAt);
+      return JSON.stringify({ reminder_id: id, due_at: dueAt.toISOString() });
+    } catch (err) {
+      return `error: create reminder failed: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
   return `error: unknown tool ${name}`;
