@@ -48,7 +48,16 @@ function wibDayStartUtc(now: Date): string {
   return new Date(`${date}T00:00:00+07:00`).toISOString();
 }
 
+/**
+ * Overnight windows wrap (22-7): hour>=start || hour<end. Same-day windows
+ * (2-5) do NOT wrap: hour>=start && hour<end. The old code applied the wrap
+ * formula always, so a 02:00-05:00 setting read as quiet ~22h/day and the
+ * outbox silently never drained. Proven 2026-09-12: three reminders sat
+ * unclaimed for 17h with the cron healthy.
+ */
 function inQuietHours(wibHour: number, start: number, end: number): boolean {
+  if (start === end) return false;
+  if (start < end) return wibHour >= start && wibHour < end;
   return wibHour >= start || wibHour < end;
 }
 
