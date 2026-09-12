@@ -29,6 +29,15 @@ this pace, so the budget is the real (and only) history control.
 Eval-set comparison (once it exists): no quality regression on recent-context
 questions at 6k vs 10k. If regression appears, revert the constant.
 
+## Static system budget (2026-09-12 amendment)
+
+Measured: base 1460 chars (~365 tokens) + guide ~480 (~120) + 5 schemas
+~1800 (~450) = ~1k static tokens on armed turns, ~365 on chit-chat. The
+static prompt grew ~40% in one day of individually-justified additions
+(appendix, /status, set_reminder). Rule going forward: ~1k tokens is the
+budget; new prompt text or new tools must argue for their tokens in the
+decision doc. If prompt caching lands, revisit.
+
 ## Explicit non-goals
 
 Touching detect gating (works), recall embeddings (147/day is theater),
