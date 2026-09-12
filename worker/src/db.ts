@@ -480,7 +480,23 @@ export async function releaseOutboxClaim(db: D1Database, id: number): Promise<vo
 }
 
 /** Counts a chat's delivered proactive sends since the given UTC timestamp string. */
-export async function countOutboxSentSince(
+export async function outboxHealth(
+  db: D1Database,
+): Promise<{ pending: number; oldest: string | null }> {
+  const row = await db
+    .prepare("SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM outbox WHERE sent_at IS NULL")
+    .first<{ n: number; oldest: string | null }>();
+  return { pending: row?.n ?? 0, oldest: row?.oldest ?? null };
+}
+
+/** Unsent reminders for one chat, due any time. */
+export async function unsentReminderCount(db: D1Database, chatId: number): Promise<number> {
+  const row = await db
+    .prepare("SELECT COUNT(*) AS n FROM reminders WHERE chat_id = ? AND sent_at IS NULL")
+    .bind(chatId)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}export async function countOutboxSentSince(
   db: D1Database,
   chatId: number,
   since: string,

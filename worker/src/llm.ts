@@ -100,7 +100,8 @@ export class OpenAICompatible {
       "never claim a listed command is missing): /today tugas hari ini, " +
       "/brief ringkasan sekarang, /usage token dan biaya, /remember <fakta> " +
       "simpan ingatan, /forget <kata kunci> hapus ingatan yang cocok, " +
-      "/quiet lihat atau atur jam sepi, /help daftar perintah. " +
+      "/quiet lihat atau atur jam sepi, /status antrean dan pengingat, " +
+      "/help daftar perintah. " +
       `Today is ${wibToday(new Date())} (WIB).`;
     if (profileBlock?.trim()) system += ` ${profileBlock.trim()}`;
     if (summaryBlock?.trim()) system += ` ${summaryBlock.trim()}`;

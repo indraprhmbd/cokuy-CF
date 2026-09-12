@@ -158,6 +158,12 @@ async function drainOutbox(env: Env, sender: Sender, now: Date): Promise<void> {
   }
   const { hour } = wibParts(now);
   const dayStart = wibDayStartUtc(now);
+  // Per-tick drain summary: silent deferral caused a 17h stall once, so the
+  // totals ride in one log line every tick that sees a non-empty outbox.
+  let sentCount = 0;
+  let deferredQuiet = 0;
+  let deferredCap = 0;
+  let failed = 0;
   for (const m of pending) {
     let claimed: boolean;
     try {
@@ -184,6 +190,7 @@ async function drainOutbox(env: Env, sender: Sender, now: Date): Promise<void> {
       );
     };
     if (inQuietHours(hour, qs, qe)) {
+      deferredQuiet++;
       await release("quiet hours");
       continue;
     }
@@ -201,12 +208,14 @@ async function drainOutbox(env: Env, sender: Sender, now: Date): Promise<void> {
     // (Proven 2026-09-11: overnight backlog ate the whole day quota at
     // 07:00 WIB, then a 15:02 reminder deferred all day.)
     if (m.kind !== "reminder" && sent >= MAX_PROACTIVE_PER_DAY) {
+      deferredCap++;
       await release("daily cap");
       continue;
     }
     try {
       await sender.sendReply(m.chatId, m.text);
     } catch (err) {
+      failed++;
       log("warn", "tick: send failed", { outbox_id: m.id, err: String(err) });
       await releaseOutboxClaim(env.DB, m.id).catch(() => undefined);
       continue;
@@ -215,6 +224,13 @@ async function drainOutbox(env: Env, sender: Sender, now: Date): Promise<void> {
     await markOutboxSent(env.DB, m.id).catch((err) =>
       log("warn", "tick: mark sent failed", { outbox_id: m.id, err: String(err) }),
     );
+    sentCount++;
+  }
+  if (pending.length > 0) {
+    log("info", "tick: drain summary", {
+      pending: pending.length, sent: sentCount,
+      deferred_quiet: deferredQuiet, deferred_cap: deferredCap, failed,
+    });
   }
 }
 

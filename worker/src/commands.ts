@@ -11,9 +11,12 @@ import {
   deleteProfileFactsByKeyword,
   getPrefs,
   markUpdateProcessed,
+  openLoops,
+  outboxHealth,
   recordFactHistory,
   saveMemory,
   setPrefs,
+  unsentReminderCount,
   usageSums,
   type UsageSums,
 } from "./db";
@@ -93,6 +96,7 @@ const HELP_TEXT =
   "/remember <fakta> - simpan ingatan\n" +
   "/forget <kata> - hapus ingatan cocok\n" +
   "/quiet [22:00-07:00] - lihat/atur jam sepi\n" +
+  "/status - antrean + pengingat + loop\n" +
   "Selain itu chat biasa aja, gue yang atur.";
 
 const START_TEXT =
@@ -158,8 +162,33 @@ export async function handleCommand(
     await handleToday(env, updateId, chatId, log);
     return true;
   }
-  if (name === "usage") {
+  if (name === "status") {
     try {
+      const [health, unsent, loops, prefs] = await Promise.all([
+        outboxHealth(env.DB),
+        unsentReminderCount(env.DB, chatId),
+        openLoops(env.DB, chatId),
+        getPrefs(env.DB, chatId),
+      ]);
+      let age = "-";
+      if (health.oldest) {
+        const mins = Math.max(0, Math.round((Date.now() - new Date(health.oldest).getTime()) / 60000));
+        age = mins >= 60 ? `${Math.floor(mins / 60)}j ${mins % 60}m` : `${mins}m`;
+      }
+      await reply(
+        `Status:\n` +
+          `antrean: ${health.pending} (tertua ${age})\n` +
+          `reminder belum kirim: ${unsent}\n` +
+          `loop terbuka: ${loops.length}\n` +
+          `jam sepi: ${pad2(prefs.quietStart)}:00-${pad2(prefs.quietEnd)}:00`,
+      );
+    } catch (err) {
+      log("error", "command: status failed", { err: String(err) });
+      await reply("Gagal baca status.");
+    }
+    return true;
+  }
+  if (name === "usage") {    try {
       const r = await usageReport(env, chatId);
       await reply(`Pemakaian lu:\n${r.lines.join("\n")}`);
     } catch (err) {
